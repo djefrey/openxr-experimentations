@@ -15,6 +15,7 @@ struct MyFramebuffer
     frames: Vec<(Arc<Framebuffer>, Arc<ImageView>)>
 }
 
+#[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main()
 {
     let setup_xr = XRSetupState::init().unwrap();
