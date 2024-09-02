@@ -7,12 +7,12 @@ mod openxr;
 mod vulkan;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
-use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo}, ImageAspects, ImageCreateFlags, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
+use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 
 struct MyFramebuffer
 {
     handle: xr::Swapchain<xr::Vulkan>,
-    frames: Vec<(Arc<Framebuffer>, Arc<ImageView>)>
+    frames: Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)>
 }
 
 const TRIANGLE_VERTICES : [BaseVertex; 3] = [
@@ -36,29 +36,23 @@ const CUBE_VERTICES : [BaseVertex; 8] = [
 ];
 
 const CUBE_INDICIES : [u16; 36] = [
-    // BOT
-    0, 1, 2,
-    2, 1, 3,
+    2, 6, 7,
+    2, 7, 3,
 
-    // TOP
-    4, 5, 6,
-    6, 5, 7,
+    0, 5, 4,
+    0, 1, 5,
 
-    // FRONT
-    0, 1, 4,
-    5, 4, 0,
+    0, 6, 2,
+    0, 4, 6,
 
-    // LEFT
-    0, 2, 6,
-    4, 6, 0,
-
-    // RIGHT
     1, 3, 7,
-    7, 6, 1,
+    1, 7, 5,
 
-    // BACK
-    2, 3, 6,
-    6, 7, 2,
+    0, 2, 3,
+    0, 3, 1,
+
+    4, 7, 6,
+    4, 5, 7,
 ];
 
 #[repr(C)]
@@ -199,7 +193,7 @@ fn main()
             }).unwrap();
 
             let image_handles = swapchain_handle.enumerate_images().unwrap();
-            let frames : Vec<(Arc<Framebuffer>, Arc<ImageView>)> = image_handles.into_iter().map(|img_handle|
+            let frames : Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)> = image_handles.into_iter().map(|img_handle|
             {
                 let img = unsafe
                 {
@@ -233,16 +227,46 @@ fn main()
                     ..Default::default()
                 }).unwrap();
 
+                let depth_img = image::Image::new(allocator.clone(), ImageCreateInfo
+                {
+                    format: format::Format::D32_SFLOAT,
+                    tiling: ImageTiling::Optimal,
+                    image_type: ImageType::Dim2d,
+                    extent: [width, height, 1],
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    initial_layout: ImageLayout::Undefined,
+                    array_layers: 2,
+                    ..Default::default()
+                }, AllocationCreateInfo
+                {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                }).unwrap();
+
+                let depth_view = ImageView::new(depth_img, ImageViewCreateInfo
+                {
+                    format: format::Format::D32_SFLOAT,
+                    view_type: ImageViewType::Dim2dArray,
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    subresource_range: ImageSubresourceRange
+                    {
+                        aspects: ImageAspects::DEPTH,
+                        array_layers: 0..2,
+                        mip_levels: 0..1,
+                    },
+                    ..Default::default()
+                }).unwrap();
+
                 let framebuffer = Framebuffer::new(vk_state.render_pass.clone(), FramebufferCreateInfo
                 {
                     flags: FramebufferCreateFlags::empty(),
                     extent: [width, height],
-                    attachments: vec![view.clone()],
+                    attachments: vec![view.clone(), depth_view.clone()],
                     layers: 1,
                     ..Default::default()
                 }).unwrap();
 
-                (framebuffer, view)
+                (framebuffer, view, depth_view)
             }).collect();
 
             MyFramebuffer { handle: swapchain_handle, frames: frames }
@@ -260,7 +284,7 @@ fn main()
         builder.begin_render_pass(
                 RenderPassBeginInfo
                 {
-                    clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into())],
+                    clear_values: vec![Some(ClearValue::Float([0.0, 0.0, 0.0, 0.0])), Some(ClearValue::Depth(1.0))],
                     ..RenderPassBeginInfo::framebuffer(swapchain.frames[img_idx].0.clone())
                 },
                 SubpassBeginInfo
@@ -321,10 +345,11 @@ fn main()
         // -------------
         // TO MOVE PRIOR WAITING IMG
 
+        builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap();
+
         unsafe
         {
-            builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap()
-                   .bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
+            builder.bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
                    .bind_index_buffer(indices_buffer.clone()).unwrap()
                    .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
         }
@@ -348,7 +373,8 @@ fn main()
         };
 
         xr_state.frame_stream.end(frame_state.predicted_display_time, xr_state.environment_blend_mode, &[
-            &CompositionLayerPassthroughFB::new(&xr_state.passthrough_layer),
+            #[cfg(target_os = "android")]
+            &CompositionLayerPassthroughFB::new(&xr_state.passthrough.layer),
             &xr::CompositionLayerProjection::new()
                 .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
                 .space(&xr_state.stage)

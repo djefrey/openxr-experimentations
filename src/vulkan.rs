@@ -2,7 +2,7 @@ use std::{default, ffi::CStr, marker::PhantomData, mem::transmute, sync::Arc};
 
 use buffer::BufferContents;
 use image::ImageAspects;
-use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState, DepthStencilStateFlags}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{*, library::*, instance::*, device::*, device::physical::*, render_pass::*};
 use ash::vk::{self, Handle};
 
@@ -189,6 +189,18 @@ impl VulkanState
                     initial_layout: image::ImageLayout::Undefined,
                     final_layout: image::ImageLayout::ColorAttachmentOptimal,
                     ..Default::default()
+                },
+                AttachmentDescription
+                {
+                    format: format::Format::D32_SFLOAT,
+                    samples: image::SampleCount::Sample1,
+                    load_op: AttachmentLoadOp::Clear,
+                    store_op: AttachmentStoreOp::DontCare,
+                    stencil_load_op: Some(AttachmentLoadOp::DontCare),
+                    stencil_store_op: Some(AttachmentStoreOp::DontCare),
+                    initial_layout: image::ImageLayout::Undefined,
+                    final_layout: image::ImageLayout::DepthAttachmentStencilReadOnlyOptimal,
+                    ..Default::default()
                 }],
                 subpasses: vec![
                     SubpassDescription
@@ -199,6 +211,12 @@ impl VulkanState
                             layout: image::ImageLayout::ColorAttachmentOptimal,
                             ..Default::default()
                         })],
+                        depth_stencil_attachment: Some(AttachmentReference
+                        {
+                            attachment: 1,
+                            layout: image::ImageLayout::DepthAttachmentStencilReadOnlyOptimal,
+                            ..Default::default()
+                        }),
                         view_mask: 0b11,
                         ..Default::default()
                     },
@@ -206,9 +224,9 @@ impl VulkanState
                 dependencies: vec![SubpassDependency
                 {
                     dst_subpass: Some(0),
-                    src_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT,
-                    dst_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT,
-                    dst_access: sync::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    src_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT | sync::PipelineStages::EARLY_FRAGMENT_TESTS,
+                    dst_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT | sync::PipelineStages::EARLY_FRAGMENT_TESTS,
+                    dst_access: sync::AccessFlags::COLOR_ATTACHMENT_WRITE | sync::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ..Default::default()
                 }],
                 correlated_view_masks: vec![0b11],
@@ -254,7 +272,7 @@ impl VulkanState
                         layout(location = 0) out vec3 outColor;
 
                         void main() {
-                            gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 0.0, -2, 0));
+                            gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 1.5, 0, 0));
                             outColor = color;
                         }
                     "
@@ -312,7 +330,12 @@ impl VulkanState
                         vertex_input_state: Some(vertex_input_state),
                         input_assembly_state: Some(InputAssemblyState::default()),
                         viewport_state: Some(ViewportState::default()),
-                        rasterization_state: Some(RasterizationState::default()),
+                        rasterization_state: Some(RasterizationState
+                        {
+                            front_face: FrontFace::CounterClockwise,
+                            cull_mode: CullMode::Front,
+                            ..Default::default()
+                        }),
                         multisample_state: Some(MultisampleState::default()),
                         color_blend_state: Some(ColorBlendState::with_attachment_states(
                             subpass.num_color_attachments() as u32,
@@ -320,9 +343,16 @@ impl VulkanState
                         ),
                         dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
                         subpass: Some(subpass.into()),
+                        depth_stencil_state: Some(DepthStencilState
+                        {
+                            depth: Some(DepthState::simple()),
+                            depth_bounds: None,
+                            stencil: None,
+                            ..Default::default()
+                        }),
                         ..GraphicsPipelineCreateInfo::layout(layout)
                     }
-                ).ok()?
+                ).unwrap()
             };
 
             println!("Vulkan setup");
