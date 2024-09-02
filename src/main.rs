@@ -1,18 +1,72 @@
 use std::sync::Arc;
 
-use openxr::{XRSetupState, XRState};
-use vulkan::VulkanState;
+use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
+use vulkan::{BaseVertex, VulkanState};
 
 mod openxr;
 mod vulkan;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
-use vulkano::{command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo}, ImageAspects, ImageCreateFlags, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, MemoryAllocator, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::graphics::viewport::{Scissor, Viewport}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
+use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo}, ImageAspects, ImageCreateFlags, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 
 struct MyFramebuffer
 {
     handle: xr::Swapchain<xr::Vulkan>,
     frames: Vec<(Arc<Framebuffer>, Arc<ImageView>)>
+}
+
+const TRIANGLE_VERTICES : [BaseVertex; 3] = [
+    BaseVertex { position: [0.0, 0.0, 0.0], color: [1.0, 0.0, 0.0] },
+    BaseVertex { position: [1.0, 0.0, 0.0], color: [0.0, 1.0, 0.0] },
+    BaseVertex { position: [0.0, 1.0, 0.0], color: [0.0, 0.0, 1.0] },
+];
+
+const CUBE_VERTICES : [BaseVertex; 8] = [
+    // BOT
+    BaseVertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 0.0] },
+    BaseVertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 0.0] },
+    BaseVertex { position: [-0.5, -0.5,  0.5], color: [0.0, 0.0, 1.0] },
+    BaseVertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 1.0, 0.0] },
+
+    // TOP
+    BaseVertex { position: [-0.5,  0.5, -0.5], color: [1.0, 0.0, 1.0] },
+    BaseVertex { position: [ 0.5,  0.5, -0.5], color: [0.0, 1.0, 1.0] },
+    BaseVertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 0.0] },
+];
+
+const CUBE_INDICIES : [u16; 36] = [
+    // BOT
+    0, 1, 2,
+    2, 1, 3,
+
+    // TOP
+    4, 5, 6,
+    6, 5, 7,
+
+    // FRONT
+    0, 1, 4,
+    5, 4, 0,
+
+    // LEFT
+    0, 2, 6,
+    4, 6, 0,
+
+    // RIGHT
+    1, 3, 7,
+    7, 6, 1,
+
+    // BACK
+    2, 3, 6,
+    6, 7, 2,
+];
+
+#[repr(C)]
+#[derive(BufferContents)]
+struct ViewMatrices
+{
+    pub left : glam::Mat4,
+    pub right : glam::Mat4
 }
 
 #[cfg_attr(target_os = "android", ndk_glue::main)]
@@ -25,9 +79,47 @@ fn main()
     let allocator = Arc::new(StandardMemoryAllocator::new_default(vk_state.device.clone()));
     let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(vk_state.device.clone(), Default::default()));
 
+    let vertex_buffer = Buffer::from_iter(allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        CUBE_VERTICES.into_iter())
+    .unwrap();
+
+    let indices_buffer = Buffer::from_iter(allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::INDEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        CUBE_INDICIES.into_iter())
+    .unwrap();
+
+    // let views_buffer = Buffer::new_sized::<ViewMatrices>(allocator.clone(),
+    //     BufferCreateInfo {
+    //         usage: BufferUsage::UNIFORM_BUFFER,
+    //         ..Default::default()
+    //     },
+    //     AllocationCreateInfo {
+    //         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+    //         ..Default::default()
+    //     })
+    // .unwrap();
+
+    // views_buffer.write();
+
     let mut swapchain : Option<MyFramebuffer> = None;
     let mut evt_storage = xr::EventDataBuffer::new();
     let mut running = false;
+    let mut i = 0;
 
 'main_loop: loop
     {
@@ -85,6 +177,8 @@ fn main()
             xr_state.frame_stream.end(frame_state.predicted_display_time, xr_state.environment_blend_mode, &[]).unwrap();
             continue;
         }
+
+        std::thread::sleep(std::time::Duration::from_millis(8));
 
         let width  = xr_state.views[0].recommended_image_rect_width;
         let height = xr_state.views[0].recommended_image_rect_height;
@@ -166,7 +260,7 @@ fn main()
         builder.begin_render_pass(
                 RenderPassBeginInfo
                 {
-                    clear_values: vec![Some([0.0, 1.0, 0.0, 1.0].into())],
+                    clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into())],
                     ..RenderPassBeginInfo::framebuffer(swapchain.frames[img_idx].0.clone())
                 },
                 SubpassBeginInfo
@@ -178,19 +272,68 @@ fn main()
             .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
             .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
+        swapchain.handle.wait_image(xr::Duration::INFINITE).unwrap();
+
+        let (_, views) = xr_state.session.locate_views(ViewConfigurationType::PRIMARY_STEREO, frame_state.predicted_display_time, &xr_state.stage).unwrap();
+
+        let view_to_matrix = |view: &xr::View| -> glam::Mat4
+        {
+            let pos = view.pose.position;
+            let rot = view.pose.orientation;
+            let fov = view.fov;
+
+            let view = glam::Mat4::from_rotation_translation(glam::quat(rot.x, rot.y, rot.z, rot.w), glam::vec3(pos.x, pos.y, pos.z)).inverse();            // angle_down is negative
+
+            // https://github.com/KhronosGroup/OpenXR-SDK-Source/blob/4b9834dbf78f22f9a71500a13442c9bc2c7edb3c/src/common/xr_linear.h#L626
+
+            let l = fov.angle_left.tan();
+            let r = fov.angle_right.tan();
+            let u = fov.angle_up.tan();
+            let d = fov.angle_down.tan();
+
+            let w = r - l;
+            let h = d - u;
+
+            let near_z = 0.1;
+            let far_z = 100.0;
+
+            let proj = glam::mat4(
+                glam::vec4(2.0 / w,     0.0,         0.0,                                    0.0),
+                glam::vec4(0.0,         2.0 / h,     0.0,                                    0.0),
+                glam::vec4((r + l) / w, (u + d) / h, -far_z / (far_z - near_z),             -1.0),
+                glam::vec4(0.0,         0.0,         -(far_z * near_z) / (far_z - near_z),   0.0)
+            );
+
+            return proj.mul_mat4(&view);
+        };
+
+        let view_matrices = ViewMatrices
+        {
+            left: view_to_matrix(&views[0]),
+            right: view_to_matrix(&views[1])
+        };
+
+        i += 1;
+
+        builder.push_constants(vk_state.pipeline.layout().clone(), 0, view_matrices).unwrap();
+
+
+        // -------------
+        // TO MOVE PRIOR WAITING IMG
+
         unsafe
         {
             builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap()
-                .draw(3, 1, 0, 0).unwrap();
+                   .bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
+                   .bind_index_buffer(indices_buffer.clone()).unwrap()
+                   .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
         }
 
         builder.end_render_pass(Default::default()).unwrap();
 
+        // -------------
+
         let cmd_buffer = builder.end().unwrap();
-
-        let (_, views) = xr_state.session.locate_views(ViewConfigurationType::PRIMARY_STEREO, frame_state.predicted_display_time, &xr_state.stage).unwrap();
-
-        swapchain.handle.wait_image(xr::Duration::INFINITE).unwrap();
 
         let _ = cmd_buffer.execute(vk_state.queue.clone()).unwrap()
             .then_signal_fence_and_flush().unwrap()
@@ -205,7 +348,11 @@ fn main()
         };
 
         xr_state.frame_stream.end(frame_state.predicted_display_time, xr_state.environment_blend_mode, &[
-            &xr::CompositionLayerProjection::new().space(&xr_state.stage).views(&[
+            &CompositionLayerPassthroughFB::new(&xr_state.passthrough_layer),
+            &xr::CompositionLayerProjection::new()
+                .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
+                .space(&xr_state.stage)
+                .views(&[
                 xr::CompositionLayerProjectionView::new()
                     .pose(views[0].pose)
                     .fov(views[0].fov)

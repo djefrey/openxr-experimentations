@@ -2,12 +2,21 @@ use std::{default, ffi::CStr, marker::PhantomData, mem::transmute, sync::Arc};
 
 use buffer::BufferContents;
 use image::ImageAspects;
-use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::VertexInputState, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{*, library::*, instance::*, device::*, device::physical::*, render_pass::*};
 use ash::vk::{self, Handle};
-use vulkano_macros::Vertex;
 
 use crate::openxr::XRSetupState;
+
+#[repr(C)]
+#[derive(BufferContents, Vertex)]
+pub struct BaseVertex
+{
+    #[format(R32G32B32_SFLOAT)]
+    pub position: [f32; 3],
+    #[format(R32G32B32_SFLOAT)]
+    pub color: [f32; 3]
+}
 
 pub struct VulkanState
 {
@@ -206,18 +215,47 @@ impl VulkanState
                 ..Default::default()
             }).unwrap();
 
+            // mod vs
+            // {
+            //     vulkano_shaders::shader! {
+            //         ty: "vertex",
+            //         src: r"
+            //             #version 450
+            //             #extension GL_EXT_multiview : require
+
+            //             layout(push_constant) uniform data { mat4 views[2]; } constants;
+
+            //             layout(location = 0) in vec3 position;
+            //             layout(location = 1) in vec3 color;
+
+            //             layout(location = 0) out vec3 outColor;
+
+            //             void main() {
+            //                 gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 0, 3, 0));
+            //                 outColor = color;
+            //             }
+            //         "
+            //     }
+            // }
+
             mod vs
             {
                 vulkano_shaders::shader! {
                     ty: "vertex",
                     src: r"
                         #version 450
+                        #extension GL_EXT_multiview : require
 
-                        layout(location = 0) out vec2 screen_coords;
+                        layout(push_constant) uniform data { mat4 views[2]; } constants;
 
-                        void main()  {
-                            screen_coords = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-                            gl_Position = vec4(screen_coords * 2.0f + -1.0f, 0.0, 1.0f);
+                        layout(location = 0) in vec3 position;
+                        layout(location = 1) in vec3 color;
+
+                        layout(location = 0) out vec3 outColor;
+
+                        void main() {
+                            gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 0.0, -2, 0));
+                            outColor = color;
                         }
                     "
                 }
@@ -229,17 +267,18 @@ impl VulkanState
                     ty: "fragment",
                     src: r"
                         #version 450
-                        #extension GL_EXT_multiview : require
 
-                        layout(location = 0) in vec2 screen_coords;
-                        layout(location = 0) out vec4 color;
+                        layout(location = 0) in vec3 inColor;
+                        layout(location = 0) out vec4 outColor;
 
                         void main() {
-                            color = vec4(screen_coords, gl_ViewIndex, 1);
+                            outColor = vec4(inColor, 1);
                         }
                     "
                 }
             }
+
+            println!("Creating pipeline");
 
             let pipeline =
             {
@@ -249,8 +288,7 @@ impl VulkanState
                 let fs = fs::load(vulkano_device.clone()).unwrap()
                     .entry_point("main").unwrap();
 
-                // let vertex_input_state = Vertex::per_vertex()
-                //     .definition(&vs.info().input_interface).unwrap();
+                let vertex_input_state = BaseVertex::per_vertex().definition(&vs).unwrap();
 
                 let stages =
                 [
@@ -271,7 +309,7 @@ impl VulkanState
                     GraphicsPipelineCreateInfo
                     {
                         stages: stages.into_iter().collect(),
-                        vertex_input_state: Some(VertexInputState::default()), // Some(vertex_input_state),
+                        vertex_input_state: Some(vertex_input_state),
                         input_assembly_state: Some(InputAssemblyState::default()),
                         viewport_state: Some(ViewportState::default()),
                         rasterization_state: Some(RasterizationState::default()),
@@ -286,6 +324,8 @@ impl VulkanState
                     }
                 ).ok()?
             };
+
+            println!("Vulkan setup");
 
             Some(VulkanState
             {

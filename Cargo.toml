@@ -5,10 +5,11 @@ edition = "2021"
 
 [dependencies]
 ash = "0.38.0" # Same version as vulkano
-openxr = { version = "^0.19.0", features = ["loaded"]}
+glam = { version = "0.29.0", features = ["bytemuck"] }
+openxr = { version = "^0.19.0", features = ["loaded"] }
 vulkano = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd4603b" } # Require a more up-to-date version than 0.34.1 to support properly OpenXR interop
-vulkano-macros = "0.34.0"
-vulkano-shaders = "0.34.0"
+vulkano-macros  = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd4603b" }
+vulkano-shaders  = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd4603b" }
 
 [[example]]
 name = "android"
