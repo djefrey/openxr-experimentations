@@ -48,4 +48,12 @@ categories = [
 [[package.metadata.android.uses_feature]]
 name = "com.oculus.feature.PASSTHROUGH"
 required = true
+
 version = 1
+[[package.metadata.android.uses_feature]]
+name = "com.oculus.feature.CONTEXTUAL_BOUNDARYLESS_APP"
+required = true
+version = 1
+
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.HAND_TRACKING"

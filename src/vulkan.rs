@@ -8,6 +8,52 @@ use ash::vk::{self, Handle};
 
 use crate::openxr::XRSetupState;
 
+// #[repr(C)]
+// #[derive(BufferContents)]
+// pub struct GlobalUniformData
+// {
+//     #[format(R32G32B32_SFLOAT)]
+//     left_x_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     left_y_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     left_z_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     left_w_col: glam::Vec4,
+
+//     #[format(R32G32B32_SFLOAT)]
+//     right_x_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     right_y_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     right_z_col: glam::Vec4,
+//     #[format(R32G32B32_SFLOAT)]
+//     right_w_col: glam::Vec4,
+// }
+
+
+#[repr(C)]
+#[derive(BufferContents)]
+pub struct GlobalUniformData
+{
+    pub left: glam::Mat4,
+    pub right: glam::Mat4
+}
+
+#[repr(C)]
+#[derive(BufferContents, Vertex)]
+pub struct ObjectUniformData
+{
+    #[format(R32G32B32_SFLOAT)]
+    transform_x_col: glam::Vec4,
+    #[format(R32G32B32_SFLOAT)]
+    transform_y_col: glam::Vec4,
+    #[format(R32G32B32_SFLOAT)]
+    transform_z_col: glam::Vec4,
+    #[format(R32G32B32_SFLOAT)]
+    transform_w_col: glam::Vec4,
+}
+
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
 pub struct BaseVertex
@@ -264,15 +310,24 @@ impl VulkanState
                         #version 450
                         #extension GL_EXT_multiview : require
 
-                        layout(push_constant) uniform data { mat4 views[2]; } constants;
+                        layout(set = 0, binding = 0) uniform GlobalData
+                        {
+                            mat4 proj[2];
+                        } global;
+
+                        layout(push_constant) uniform ObjectData
+                        {
+                            mat4 transform;
+                        } object;
 
                         layout(location = 0) in vec3 position;
                         layout(location = 1) in vec3 color;
 
                         layout(location = 0) out vec3 outColor;
 
-                        void main() {
-                            gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 1.5, 0, 0));
+                        void main()
+                        {
+                            gl_Position = global.proj[gl_ViewIndex] * object.transform * vec4(position, 1);
                             outColor = color;
                         }
                     "
@@ -289,7 +344,8 @@ impl VulkanState
                         layout(location = 0) in vec3 inColor;
                         layout(location = 0) out vec4 outColor;
 
-                        void main() {
+                        void main()
+                        {
                             outColor = vec4(inColor, 1);
                         }
                     "

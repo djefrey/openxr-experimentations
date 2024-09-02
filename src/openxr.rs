@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, ptr::null};
 
-use openxr::{self as xr, CompositionLayerBase, Extent2Di, Passthrough, PassthroughFlagsFB, PassthroughLayerPurposeFB};
+use openxr::{self as xr, CompositionLayerBase, Extent2Di, Hand, Passthrough, PassthroughFlagsFB, PassthroughLayerPurposeFB};
 use vulkano::{swapchain, Handle, VulkanObject};
 
 use crate::vulkan::VulkanState;
@@ -24,8 +24,15 @@ pub struct XRState
     pub frame_waiter: xr::FrameWaiter,
     pub frame_stream: xr::FrameStream<xr::Vulkan>,
 
-    // left_space: xr::Space,
-    // right_space: xr::Space,
+    // pub action_set: xr::ActionSet,
+    // pub left_hand: xr::Action<xr::Posef>,
+    // pub right_hand: xr::Action<xr::Posef>,
+
+    // #[cfg(target_os = "android")]
+    pub hand_tracker: xr::HandTracker,
+
+    // pub left_space: xr::Space,
+    // pub right_space: xr::Space,
     pub stage: xr::Space,
 
     pub views: Vec<xr::ViewConfigurationView>,
@@ -52,6 +59,7 @@ impl XRSetupState
 
         let mut enabled_extensions = xr::ExtensionSet::default();
         enabled_extensions.khr_vulkan_enable2 = true;
+        enabled_extensions.ext_hand_tracking = true;
 
         #[cfg(target_os = "android")]
         {
@@ -101,17 +109,50 @@ impl XRState
         let instance = setup.instance;
         let system_id = setup.system_id;
 
-        let environment_blend_modes = instance.enumerate_environment_blend_modes(system_id, VIEW_TYPE).ok()?;
+        println!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
 
-        println!("Blend Modes:");
-        for blend_mode in &environment_blend_modes
-        {
-            println!("- {:?}", blend_mode);
-        }
-
-        let environment_blend_mode = environment_blend_modes[0];
+        let environment_blend_mode = instance.enumerate_environment_blend_modes(system_id, VIEW_TYPE).ok()?[0];
 
         let (session, frame_waiter, frame_stream) = unsafe { instance.create_session::<xr::Vulkan>(system_id, &vulkan.to_session_create_infos()).ok()? };
+        // let action_set = instance.create_action_set("input", "Input Action Set", 0).unwrap();
+
+        // let left_hand = action_set.create_action::<xr::Posef>("left", "Left Hand", &[]).unwrap();
+        // let right_hand = action_set.create_action::<xr::Posef>("right", "Right Hand", &[]).unwrap();
+
+        // instance
+        //     .suggest_interaction_profile_bindings(
+        //         instance
+        //             .string_to_path("/interaction_profiles/oculus/hand_tracking")
+        //             .unwrap(),
+        //         &[
+        //             xr::Binding::new(
+        //                 &left_hand,
+        //                 instance
+        //                     .string_to_path("/user/hand/left/input/grip/pose")
+        //                     .unwrap(),
+        //             ),
+        //             xr::Binding::new(
+        //                 &right_hand,
+        //                 instance
+        //                     .string_to_path("/user/hand/right/input/grip/pose")
+        //                     .unwrap(),
+        //             ),
+        //         ],
+        //     )
+        //     .unwrap();
+
+        // session.attach_action_sets(&[&action_set]).unwrap();
+
+        // let left_space = left_hand
+        //     .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        //     .unwrap();
+
+        // let right_space = right_hand
+        //     .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        //     .unwrap();
+
+        // #[cfg(target_os = "android")]
+        let right_hand_tracker = session.create_hand_tracker(Hand::RIGHT).unwrap();
 
         let stage = session.create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY).ok()?;
         let views = instance.enumerate_view_configuration_views(system_id, VIEW_TYPE).ok()?;
@@ -136,6 +177,13 @@ impl XRState
             session,
             frame_waiter,
             frame_stream,
+            // action_set,
+            // left_hand,
+            // right_hand,
+            // left_space,
+            // right_space,
+            // #[cfg(target_os = "android")]
+            hand_tracker: right_hand_tracker,
             stage,
             views,
 

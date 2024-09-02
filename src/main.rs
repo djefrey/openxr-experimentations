@@ -1,19 +1,26 @@
-use std::sync::Arc;
+use core::f32;
+use std::{f32::consts::PI, sync::Arc, time::Instant};
 
+use glam::EulerRot;
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
-use vulkan::{BaseVertex, VulkanState};
+use vulkan::{BaseVertex, GlobalUniformData, VulkanState};
 
 mod openxr;
 mod vulkan;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
-use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
+use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 
 struct MyFramebuffer
 {
     handle: xr::Swapchain<xr::Vulkan>,
-    frames: Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)>
+    frames: Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)>,
+    global_uniforms: Vec<(Subbuffer<GlobalUniformData>, Arc<DescriptorSet>)>,
 }
+
+#[repr(C)]
+#[derive(BufferContents)]
+struct Transform(glam::Mat4);
 
 const TRIANGLE_VERTICES : [BaseVertex; 3] = [
     BaseVertex { position: [0.0, 0.0, 0.0], color: [1.0, 0.0, 0.0] },
@@ -55,23 +62,18 @@ const CUBE_INDICIES : [u16; 36] = [
     4, 5, 7,
 ];
 
-#[repr(C)]
-#[derive(BufferContents)]
-struct ViewMatrices
-{
-    pub left : glam::Mat4,
-    pub right : glam::Mat4
-}
-
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main()
 {
+    println!("MAAAAAAAIN");
+
     let setup_xr = XRSetupState::init().unwrap();
     let mut vk_state = VulkanState::from_xr(&setup_xr).unwrap();
     let mut xr_state = XRState::init(setup_xr, &vk_state).unwrap();
 
     let allocator = Arc::new(StandardMemoryAllocator::new_default(vk_state.device.clone()));
     let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(vk_state.device.clone(), Default::default()));
+    let desc_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(vk_state.device.clone(), StandardDescriptorSetAllocatorCreateInfo::default()));
 
     let vertex_buffer = Buffer::from_iter(allocator.clone(),
         BufferCreateInfo {
@@ -114,6 +116,11 @@ fn main()
     let mut evt_storage = xr::EventDataBuffer::new();
     let mut running = false;
     let mut i = 0;
+
+    let cube_rot = glam::Quat::from_euler(EulerRot::XYX, PI / 4.0, PI / 4.0, PI / 4.0);
+    let mut transform = glam::Mat4::IDENTITY;
+
+    let mut last_frame : Instant = Instant::now();
 
 'main_loop: loop
     {
@@ -164,6 +171,45 @@ fn main()
 
         let frame_state = xr_state.frame_waiter.wait().unwrap();
 
+        // let time_since_last_frame = Instant::now() - last_frame;
+        // let rot_value = (PI / 2.0) * time_since_last_frame.as_secs_f32();
+
+        // transform = transform.mul_mat4(&glam::Mat4::from_euler(EulerRot::XYX, rot_value, rot_value, 0.0));
+
+        // xr_state.session.sync_actions(&[(&xr_state.action_set).into()]).unwrap();
+
+        // let left_location = xr_state.left_space
+        //     .locate(&xr_state.stage, frame_state.predicted_display_time)
+        //     .unwrap();
+
+        // let right_location = xr_state.right_space
+        //     .locate(&xr_state.stage, frame_state.predicted_display_time)
+        //     .unwrap();
+
+        // println!("{:?} {:?}", left_location.pose.position, right_location.pose.position);
+
+        #[cfg(target_os = "android")]
+        {
+        }
+
+        // https://docs.unity3d.com/Packages/com.unity.xr.hands@1.4/manual/hand-data/xr-hand-data-model.html
+
+        if let Ok(hand_joint_maybeuninit) = xr_state.stage.locate_hand_joints(&xr_state.hand_tracker, frame_state.predicted_display_time)
+        {
+            if let Some(hand_joint) = hand_joint_maybeuninit
+            {
+                let joint = hand_joint[xr::HandJoint::MIDDLE_PROXIMAL];
+                let hand_pos = joint.pose.position;
+                let hand_rot = joint.pose.orientation;
+
+                transform = glam::Mat4::from_scale_rotation_translation(glam::vec3(0.1, 0.1, 0.1),
+                                                                        glam::quat(hand_rot.x, hand_rot.y, hand_rot.z, hand_rot.w),
+                                                                        glam::vec3(hand_pos.x, hand_pos.y, hand_pos.z));
+            }
+        }
+
+        // ---- Rendering -----
+
         xr_state.frame_stream.begin().unwrap();
 
         if !frame_state.should_render
@@ -171,8 +217,6 @@ fn main()
             xr_state.frame_stream.end(frame_state.predicted_display_time, xr_state.environment_blend_mode, &[]).unwrap();
             continue;
         }
-
-        std::thread::sleep(std::time::Duration::from_millis(8));
 
         let width  = xr_state.views[0].recommended_image_rect_width;
         let height = xr_state.views[0].recommended_image_rect_height;
@@ -193,7 +237,7 @@ fn main()
             }).unwrap();
 
             let image_handles = swapchain_handle.enumerate_images().unwrap();
-            let frames : Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)> = image_handles.into_iter().map(|img_handle|
+            let frames = image_handles.into_iter().map(|img_handle|
             {
                 let img = unsafe
                 {
@@ -267,14 +311,39 @@ fn main()
                 }).unwrap();
 
                 (framebuffer, view, depth_view)
-            }).collect();
+            }).collect::<Vec<_>>();
 
-            MyFramebuffer { handle: swapchain_handle, frames: frames }
+            let global_uniforms = frames.iter().map(|_|
+            {
+                let buffer = Buffer::new_sized::<GlobalUniformData>(allocator.clone(),
+                    BufferCreateInfo
+                    {
+                        usage: BufferUsage::UNIFORM_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo
+                    {
+                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                        ..Default::default()
+                    }
+                ).unwrap();
+
+                let desc = DescriptorSet::new(
+                    desc_set_allocator.clone(),
+                    vk_state.pipeline.layout().set_layouts()[0].clone(),
+                    [WriteDescriptorSet::buffer(0, buffer.clone())],
+                    []
+                ).unwrap();
+
+                (buffer, desc)
+            }).collect::<Vec<_>>();
+
+            MyFramebuffer { handle: swapchain_handle, frames, global_uniforms }
         });
 
         let img_idx = swapchain.handle.acquire_image().unwrap() as usize;
 
-        // println!("Render in framebuffer #{}: {} {}", img_idx, width, height);
+        // Writing Command Buffer
 
         let mut builder = RecordingCommandBuffer::new(cmd_allocator.clone(),
                                                       vk_state.queue_family_index,
@@ -296,7 +365,25 @@ fn main()
             .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
             .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
-        swapchain.handle.wait_image(xr::Duration::INFINITE).unwrap();
+        i += 1;
+
+        builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap();
+
+        unsafe
+        {
+            builder.push_constants(vk_state.pipeline.layout().clone(), 0, Transform(transform)).unwrap();
+
+            builder.bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
+                   .bind_index_buffer(indices_buffer.clone()).unwrap()
+                   .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                   .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+        }
+
+        builder.end_render_pass(Default::default()).unwrap();
+
+        let cmd_buffer = builder.end().unwrap();
+
+        // Post Command Buffer
 
         let (_, views) = xr_state.session.locate_views(ViewConfigurationType::PRIMARY_STEREO, frame_state.predicted_display_time, &xr_state.stage).unwrap();
 
@@ -331,34 +418,16 @@ fn main()
             return proj.mul_mat4(&view);
         };
 
-        let view_matrices = ViewMatrices
+        // Global uniform buffer is updated at the last moment to use the most accurate view matrix possible
+
+        let uniform_subbuffer = &swapchain.global_uniforms[img_idx].0;
+        *uniform_subbuffer.write().unwrap() = GlobalUniformData
         {
             left: view_to_matrix(&views[0]),
             right: view_to_matrix(&views[1])
         };
 
-        i += 1;
-
-        builder.push_constants(vk_state.pipeline.layout().clone(), 0, view_matrices).unwrap();
-
-
-        // -------------
-        // TO MOVE PRIOR WAITING IMG
-
-        builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap();
-
-        unsafe
-        {
-            builder.bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
-                   .bind_index_buffer(indices_buffer.clone()).unwrap()
-                   .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
-        }
-
-        builder.end_render_pass(Default::default()).unwrap();
-
-        // -------------
-
-        let cmd_buffer = builder.end().unwrap();
+        swapchain.handle.wait_image(xr::Duration::INFINITE).unwrap();
 
         let _ = cmd_buffer.execute(vk_state.queue.clone()).unwrap()
             .then_signal_fence_and_flush().unwrap()
@@ -397,6 +466,8 @@ fn main()
                     )
             ]),
         ]).unwrap();
+
+        last_frame = Instant::now();
 
         // println!("Frame displayed");
     }
