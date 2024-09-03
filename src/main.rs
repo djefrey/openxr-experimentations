@@ -3,13 +3,15 @@ use std::{f32::consts::PI, sync::Arc, time::Instant};
 
 use glam::EulerRot;
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
-use vulkan::{BaseVertex, GlobalUniformData, VulkanState};
+use vulkan::{BaseVertex, GlobalUniformData, ObjectData, VulkanState};
 
 mod openxr;
 mod vulkan;
+mod obb;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
+use obb::OBB;
 
 struct MyFramebuffer
 {
@@ -18,17 +20,13 @@ struct MyFramebuffer
     global_uniforms: Vec<(Subbuffer<GlobalUniformData>, Arc<DescriptorSet>)>,
 }
 
-#[repr(C)]
-#[derive(BufferContents)]
-struct Transform(glam::Mat4);
-
 const TRIANGLE_VERTICES : [BaseVertex; 3] = [
     BaseVertex { position: [0.0, 0.0, 0.0], color: [1.0, 0.0, 0.0] },
     BaseVertex { position: [1.0, 0.0, 0.0], color: [0.0, 1.0, 0.0] },
     BaseVertex { position: [0.0, 1.0, 0.0], color: [0.0, 0.0, 1.0] },
 ];
 
-const CUBE_VERTICES : [BaseVertex; 8] = [
+const DEBUG_CUBE : [BaseVertex; 8] = [
     // BOT
     BaseVertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 0.0] },
     BaseVertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 0.0] },
@@ -40,6 +38,20 @@ const CUBE_VERTICES : [BaseVertex; 8] = [
     BaseVertex { position: [ 0.5,  0.5, -0.5], color: [0.0, 1.0, 1.0] },
     BaseVertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
     BaseVertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 0.0] },
+];
+
+const WHITE_CUBE : [BaseVertex; 8] = [
+    // BOT
+    BaseVertex { position: [-0.5, -0.5, -0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [ 0.5, -0.5, -0.5], color: [1.0, 1.0, 0.0] },
+    BaseVertex { position: [-0.5, -0.5,  0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 1.0, 1.0] },
+
+    // TOP
+    BaseVertex { position: [-0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
+    BaseVertex { position: [ 0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
 ];
 
 const CUBE_INDICIES : [u16; 36] = [
@@ -62,6 +74,34 @@ const CUBE_INDICIES : [u16; 36] = [
     4, 5, 7,
 ];
 
+#[derive(Clone, Copy)]
+struct Transform
+{
+    pub pos: glam::Vec3,
+    pub rot: glam::Quat,
+    pub size: glam::Vec3
+}
+
+impl Transform
+{
+    pub const IDENTITY : Self = Self { pos: glam::Vec3::ZERO, rot: glam::Quat::IDENTITY, size: glam::Vec3::ONE };
+
+    pub fn new(pos: glam::Vec3, rot: glam::Quat, size: glam::Vec3) -> Self
+    {
+        Self
+        {
+            pos,
+            rot,
+            size
+        }
+    }
+
+    pub fn to_mat4(&self) -> glam::Mat4
+    {
+        glam::Mat4::from_scale_rotation_translation(self.size, self.rot, self.pos)
+    }
+}
+
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main()
 {
@@ -75,7 +115,7 @@ fn main()
     let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(vk_state.device.clone(), Default::default()));
     let desc_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(vk_state.device.clone(), StandardDescriptorSetAllocatorCreateInfo::default()));
 
-    let vertex_buffer = Buffer::from_iter(allocator.clone(),
+    let debug_cube_vertex_buffer = Buffer::from_iter(allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::VERTEX_BUFFER,
             ..Default::default()
@@ -84,7 +124,19 @@ fn main()
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         },
-        CUBE_VERTICES.into_iter())
+        DEBUG_CUBE.into_iter())
+    .unwrap();
+
+    let cube_vertex_buffer = Buffer::from_iter(allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        WHITE_CUBE.into_iter())
     .unwrap();
 
     let indices_buffer = Buffer::from_iter(allocator.clone(),
@@ -117,8 +169,10 @@ fn main()
     let mut running = false;
     let mut i = 0;
 
-    let cube_rot = glam::Quat::from_euler(EulerRot::XYX, PI / 4.0, PI / 4.0, PI / 4.0);
-    let mut transform = glam::Mat4::IDENTITY;
+    let mut transform = Transform::new(glam::vec3(0.0, 1.5, 0.0), glam::Quat::IDENTITY, glam::vec3(0.2, 0.2, 0.2));
+    let cube_obb = OBB::new(glam::vec3(0.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
+
+    let mut tips : [Transform; 5] = [Transform::IDENTITY; 5];
 
     let mut last_frame : Instant = Instant::now();
 
@@ -194,17 +248,42 @@ fn main()
 
         // https://docs.unity3d.com/Packages/com.unity.xr.hands@1.4/manual/hand-data/xr-hand-data-model.html
 
+        // if let Ok(hand_joint_maybeuninit) = xr_state.stage.locate_hand_joints(&xr_state.hand_tracker, frame_state.predicted_display_time)
+        // {
+        //     if let Some(hand_joint) = hand_joint_maybeuninit
+        //     {
+        //         let joint = hand_joint[xr::HandJoint::MIDDLE_PROXIMAL];
+        //         let hand_pos = joint.pose.position;
+        //         let hand_rot = joint.pose.orientation;
+
+        //         transform = glam::Mat4::from_scale_rotation_translation(glam::vec3(0.1, 0.1, 0.1),
+        //                                                                 glam::quat(hand_rot.x, hand_rot.y, hand_rot.z, hand_rot.w),
+        //                                                                 glam::vec3(hand_pos.x, hand_pos.y, hand_pos.z));
+        //     }
+        // }
+
         if let Ok(hand_joint_maybeuninit) = xr_state.stage.locate_hand_joints(&xr_state.hand_tracker, frame_state.predicted_display_time)
         {
             if let Some(hand_joint) = hand_joint_maybeuninit
             {
-                let joint = hand_joint[xr::HandJoint::MIDDLE_PROXIMAL];
-                let hand_pos = joint.pose.position;
-                let hand_rot = joint.pose.orientation;
+                fn joint_to_transform(joint: &xr::HandJointLocationEXT) -> Transform
+                {
+                    let pos = joint.pose.position;
+                    let rot = joint.pose.orientation;
 
-                transform = glam::Mat4::from_scale_rotation_translation(glam::vec3(0.1, 0.1, 0.1),
-                                                                        glam::quat(hand_rot.x, hand_rot.y, hand_rot.z, hand_rot.w),
-                                                                        glam::vec3(hand_pos.x, hand_pos.y, hand_pos.z));
+                    Transform
+                    {
+                        pos: glam::vec3(pos.x, pos.y, pos.z),
+                        rot: glam::quat(rot.x, rot.y, rot.z, rot.w),
+                        size: glam::vec3(0.03, 0.03, 0.03)
+                    }
+                }
+
+                tips[0] = joint_to_transform(&hand_joint[xr::HandJoint::LITTLE_TIP]);
+                tips[1] = joint_to_transform(&hand_joint[xr::HandJoint::RING_TIP]);
+                tips[2] = joint_to_transform(&hand_joint[xr::HandJoint::MIDDLE_TIP]);
+                tips[3] = joint_to_transform(&hand_joint[xr::HandJoint::INDEX_TIP]);
+                tips[4] = joint_to_transform(&hand_joint[xr::HandJoint::THUMB_TIP]);
             }
         }
 
@@ -371,12 +450,36 @@ fn main()
 
         unsafe
         {
-            builder.push_constants(vk_state.pipeline.layout().clone(), 0, Transform(transform)).unwrap();
+            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            {
+                transform: transform.to_mat4(),
+                tint: glam::Vec4::ONE,
+            }).unwrap();
 
-            builder.bind_vertex_buffers(0, [vertex_buffer.clone()]).unwrap()
+            builder.bind_vertex_buffers(0, [debug_cube_vertex_buffer.clone()]).unwrap()
                    .bind_index_buffer(indices_buffer.clone()).unwrap()
                    .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
                    .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+        }
+
+        unsafe
+        {
+            for &tip in tips.iter()
+            {
+                let tip_obb = OBB::from_transform(&tip);
+                let does_collide = tip_obb.does_collide(&cube_obb);
+
+                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                {
+                    transform: tip.to_mat4(),
+                    tint: if does_collide { glam::vec4(0.0, 1.0, 0.0, 1.0) } else { glam::vec4(1.0, 0.0, 0.0, 1.0) },
+                }).unwrap();
+
+                builder.bind_vertex_buffers(0, [cube_vertex_buffer.clone()]).unwrap()
+                       .bind_index_buffer(indices_buffer.clone()).unwrap()
+                       .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                       .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+            }
         }
 
         builder.end_render_pass(Default::default()).unwrap();

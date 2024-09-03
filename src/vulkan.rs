@@ -40,19 +40,31 @@ pub struct GlobalUniformData
     pub right: glam::Mat4
 }
 
+// #[repr(C)]
+// #[derive(BufferContents)]
+// pub struct ObjectUniformData
+// {
+//     #[format(R32G32B32A32_SFLOAT)]
+//     transform_x_col: glam::Vec4,
+//     #[format(R32G32B32A32_SFLOAT)]
+//     transform_y_col: glam::Vec4,
+//     #[format(R32G32B32A32_SFLOAT)]
+//     transform_z_col: glam::Vec4,
+//     #[format(R32G32B32A32_SFLOAT)]
+//     transform_w_col: glam::Vec4,
+
+//     #[format(R32G32B32_SFLOAT)]
+//     tint: glam::Vec3
+// }
+
 #[repr(C)]
-#[derive(BufferContents, Vertex)]
-pub struct ObjectUniformData
+#[derive(BufferContents)]
+pub struct ObjectData
 {
-    #[format(R32G32B32_SFLOAT)]
-    transform_x_col: glam::Vec4,
-    #[format(R32G32B32_SFLOAT)]
-    transform_y_col: glam::Vec4,
-    #[format(R32G32B32_SFLOAT)]
-    transform_z_col: glam::Vec4,
-    #[format(R32G32B32_SFLOAT)]
-    transform_w_col: glam::Vec4,
+    pub transform: glam::Mat4,
+    pub tint: glam::Vec4
 }
+
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
@@ -318,17 +330,18 @@ impl VulkanState
                         layout(push_constant) uniform ObjectData
                         {
                             mat4 transform;
+                            vec4 tint;
                         } object;
 
                         layout(location = 0) in vec3 position;
-                        layout(location = 1) in vec3 color;
+                        layout(location = 1) in vec4 color;
 
-                        layout(location = 0) out vec3 outColor;
+                        layout(location = 0) out vec4 outColor;
 
                         void main()
                         {
                             gl_Position = global.proj[gl_ViewIndex] * object.transform * vec4(position, 1);
-                            outColor = color;
+                            outColor = color * object.tint;
                         }
                     "
                 }
@@ -341,12 +354,12 @@ impl VulkanState
                     src: r"
                         #version 450
 
-                        layout(location = 0) in vec3 inColor;
+                        layout(location = 0) in vec4 inColor;
                         layout(location = 0) out vec4 outColor;
 
                         void main()
                         {
-                            outColor = vec4(inColor, 1);
+                            outColor = inColor;
                         }
                     "
                 }
