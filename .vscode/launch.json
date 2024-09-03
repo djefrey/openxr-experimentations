@@ -8,7 +8,7 @@
             "name": "Debug",
             "type": "cppdbg",
             "request": "launch",
-            "environment": [{ "name": "XR_RUNTIME_JSON", "value": "/home/wjeffrey/monado/build/openxr_monado-dev.json" }],
+            "environment": [{ "name": "XR_RUNTIME_JSON", "value": "~/monado/build/openxr_monado-dev.json" }],
             "program": "${workspaceFolder}/target/debug/openxr-tests",
             "cwd": "${workspaceRoot}",
         }
