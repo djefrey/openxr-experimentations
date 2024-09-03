@@ -70,7 +70,16 @@ impl OBB
         self
     }
 
-    pub fn does_collide(&self, other: &OBB) -> bool
+    pub fn update_from_transform(&mut self, transform: &Transform) -> &mut Self
+    {
+        self.center = transform.pos;
+        self.rot = transform.rot;
+        self.size = transform.size;
+
+        self
+    }
+
+    pub fn does_collide_with(&self, other: &OBB) -> bool
     {
         let rpos = other.center - self.center;
         let self_computed = self.compute_obb();

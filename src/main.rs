@@ -170,9 +170,12 @@ fn main()
     let mut i = 0;
 
     let mut transform = Transform::new(glam::vec3(0.0, 1.5, 0.0), glam::Quat::IDENTITY, glam::vec3(0.2, 0.2, 0.2));
-    let cube_obb = OBB::new(glam::vec3(0.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
+    let mut cube_obb = OBB::new(glam::vec3(0.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
 
     let mut tips : [Transform; 5] = [Transform::IDENTITY; 5];
+    let mut wrist : Transform = Transform::IDENTITY;
+
+    let mut wrist_last_frame : Option<Transform> = None;
 
     let mut last_frame : Instant = Instant::now();
 
@@ -279,11 +282,57 @@ fn main()
                     }
                 }
 
-                tips[0] = joint_to_transform(&hand_joint[xr::HandJoint::LITTLE_TIP]);
-                tips[1] = joint_to_transform(&hand_joint[xr::HandJoint::RING_TIP]);
-                tips[2] = joint_to_transform(&hand_joint[xr::HandJoint::MIDDLE_TIP]);
-                tips[3] = joint_to_transform(&hand_joint[xr::HandJoint::INDEX_TIP]);
-                tips[4] = joint_to_transform(&hand_joint[xr::HandJoint::THUMB_TIP]);
+                tips[0] = joint_to_transform(&hand_joint[xr::HandJoint::THUMB_TIP]);
+
+                tips[1] = joint_to_transform(&hand_joint[xr::HandJoint::LITTLE_TIP]);
+                tips[2] = joint_to_transform(&hand_joint[xr::HandJoint::RING_TIP]);
+                tips[3] = joint_to_transform(&hand_joint[xr::HandJoint::MIDDLE_TIP]);
+                tips[4] = joint_to_transform(&hand_joint[xr::HandJoint::INDEX_TIP]);
+
+                wrist = joint_to_transform(&hand_joint[xr::HandJoint::WRIST]);
+
+                {
+                    let thumb_obb = OBB::from_transform(&tips[0]);
+                    let mut cube_snapping = false;
+
+                    if thumb_obb.does_collide_with(&cube_obb)
+                    {
+                        for i in 1..=4
+                        {
+                            let tip_obb = OBB::from_transform(&tips[i]);
+
+                            if tip_obb.does_collide_with(&cube_obb)
+                            {
+                                cube_snapping = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if cube_snapping
+                    {
+                        if let Some(last_wirst) = wrist_last_frame
+                        {
+                            let wrist_to_cube = transform.pos - wrist.pos;
+
+                            let diff_pos = wrist.pos - last_wirst.pos;
+                            let diff_rot = wrist.rot * last_wirst.rot.inverse();
+
+                            transform.pos += diff_pos;
+                            transform.rot = diff_rot.mul_quat(transform.rot);
+
+                            transform.pos += diff_rot.mul_vec3(wrist_to_cube) - wrist_to_cube;
+
+                            cube_obb.update_from_transform(&transform);
+                        }
+
+                        wrist_last_frame = Some(wrist);
+                    }
+                    else
+                    {
+                        wrist_last_frame = None;
+                    }
+                }
             }
         }
 
@@ -467,7 +516,7 @@ fn main()
             for &tip in tips.iter()
             {
                 let tip_obb = OBB::from_transform(&tip);
-                let does_collide = tip_obb.does_collide(&cube_obb);
+                let does_collide = tip_obb.does_collide_with(&cube_obb);
 
                 builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
                 {
