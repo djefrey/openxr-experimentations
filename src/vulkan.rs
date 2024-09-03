@@ -2,7 +2,7 @@ use std::{default, ffi::CStr, marker::PhantomData, mem::transmute, sync::Arc};
 
 use buffer::BufferContents;
 use image::ImageAspects;
-use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState, DepthStencilStateFlags}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState, DepthStencilStateFlags}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{*, library::*, instance::*, device::*, device::physical::*, render_pass::*};
 use ash::vk::{self, Handle};
 
@@ -76,6 +76,14 @@ pub struct BaseVertex
     pub color: [f32; 3]
 }
 
+#[repr(C)]
+#[derive(BufferContents, Vertex, Clone, Copy)]
+pub struct LineVertex
+{
+    #[format(R32G32B32_SFLOAT)]
+    pub position: [f32; 3],
+}
+
 pub struct VulkanState
 {
     pub instance: Arc<Instance>,
@@ -85,6 +93,7 @@ pub struct VulkanState
     pub queue_family_index: u32,
     pub render_pass: Arc<RenderPass>,
     pub pipeline: Arc<GraphicsPipeline>,
+    pub line_pipeline: Arc<GraphicsPipeline>
 }
 
 impl VulkanState
@@ -347,6 +356,37 @@ impl VulkanState
                 }
             }
 
+            mod line_vs
+            {
+                vulkano_shaders::shader! {
+                    ty: "vertex",
+                    src: r"
+                        #version 450
+                        #extension GL_EXT_multiview : require
+
+                        layout(set = 0, binding = 0) uniform GlobalData
+                        {
+                            mat4 proj[2];
+                        } global;
+
+                        layout(push_constant) uniform ObjectData
+                        {
+                            mat4 transform;
+                            vec4 tint;
+                        } object;
+
+                        layout(location = 0) in vec3 position;
+                        layout(location = 0) out vec4 outColor;
+
+                        void main()
+                        {
+                            gl_Position = global.proj[gl_ViewIndex] * object.transform * vec4(position, 1);
+                            outColor = object.tint;
+                        }
+                    "
+                }
+            }
+
             mod fs
             {
                 vulkano_shaders::shader! {
@@ -424,6 +464,62 @@ impl VulkanState
                 ).unwrap()
             };
 
+            let line_pipeline =
+            {
+                let vs = line_vs::load(vulkano_device.clone()).unwrap()
+                    .entry_point("main").unwrap();
+
+                let fs = fs::load(vulkano_device.clone()).unwrap()
+                    .entry_point("main").unwrap();
+
+                let vertex_input_state = LineVertex::per_vertex().definition(&vs).unwrap();
+
+                let stages =
+                [
+                    PipelineShaderStageCreateInfo::new(vs),
+                    PipelineShaderStageCreateInfo::new(fs),
+                ];
+
+                let layout = PipelineLayout::new(
+                    vulkano_device.clone(),
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                        .into_pipeline_layout_create_info(vulkano_device.clone())
+                        .unwrap()
+                ).ok()?;
+
+                let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
+
+                GraphicsPipeline::new(vulkano_device.clone(), None,
+                    GraphicsPipelineCreateInfo
+                    {
+                        stages: stages.into_iter().collect(),
+                        vertex_input_state: Some(vertex_input_state),
+                        input_assembly_state: Some(InputAssemblyState
+                        {
+                            topology: PrimitiveTopology::LineList,
+                            ..Default::default()
+                        }),
+                        viewport_state: Some(ViewportState::default()),
+                        rasterization_state: Some(RasterizationState::default()),
+                        multisample_state: Some(MultisampleState::default()),
+                        color_blend_state: Some(ColorBlendState::with_attachment_states(
+                            subpass.num_color_attachments() as u32,
+                            ColorBlendAttachmentState::default())
+                        ),
+                        dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
+                        subpass: Some(subpass.into()),
+                        depth_stencil_state: Some(DepthStencilState
+                        {
+                            depth: Some(DepthState::simple()),
+                            depth_bounds: None,
+                            stencil: None,
+                            ..Default::default()
+                        }),
+                        ..GraphicsPipelineCreateInfo::layout(layout)
+                    }
+                ).unwrap()
+            };
+
             println!("Vulkan setup");
 
             Some(VulkanState
@@ -434,7 +530,8 @@ impl VulkanState
                 queue,
                 queue_family_index,
                 render_pass,
-                pipeline
+                pipeline,
+                line_pipeline
             })
         }
     }

@@ -3,7 +3,7 @@ use std::{f32::consts::PI, sync::Arc, time::Instant};
 
 use glam::EulerRot;
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
-use vulkan::{BaseVertex, GlobalUniformData, ObjectData, VulkanState};
+use vulkan::{BaseVertex, GlobalUniformData, LineVertex, ObjectData, VulkanState};
 
 mod openxr;
 mod vulkan;
@@ -74,6 +74,51 @@ const CUBE_INDICIES : [u16; 36] = [
     4, 5, 7,
 ];
 
+
+const HAND_LINES : [xr::HandJointEXT; 64] =
+[
+    xr::HandJointEXT::WRIST, xr::HandJointEXT::LITTLE_METACARPAL,
+    xr::HandJointEXT::WRIST, xr::HandJointEXT::RING_METACARPAL,
+    xr::HandJointEXT::WRIST, xr::HandJointEXT::MIDDLE_METACARPAL,
+    xr::HandJointEXT::WRIST, xr::HandJointEXT::INDEX_METACARPAL,
+    xr::HandJointEXT::WRIST, xr::HandJointEXT::THUMB_METACARPAL,
+
+    xr::HandJointEXT::LITTLE_METACARPAL, xr::HandJointEXT::RING_METACARPAL,
+    xr::HandJointEXT::RING_METACARPAL, xr::HandJointEXT::MIDDLE_METACARPAL,
+    xr::HandJointEXT::MIDDLE_METACARPAL, xr::HandJointEXT::INDEX_METACARPAL,
+    xr::HandJointEXT::INDEX_METACARPAL, xr::HandJointEXT::THUMB_METACARPAL,
+
+    xr::HandJointEXT::LITTLE_METACARPAL, xr::HandJointEXT::LITTLE_PROXIMAL,
+    xr::HandJointEXT::RING_METACARPAL, xr::HandJointEXT::RING_PROXIMAL,
+    xr::HandJointEXT::MIDDLE_METACARPAL, xr::HandJointEXT::MIDDLE_PROXIMAL,
+    xr::HandJointEXT::INDEX_METACARPAL, xr::HandJointEXT::INDEX_PROXIMAL,
+    xr::HandJointEXT::THUMB_METACARPAL, xr::HandJointEXT::THUMB_PROXIMAL,
+
+    xr::HandJointEXT::LITTLE_PROXIMAL, xr::HandJointEXT::RING_PROXIMAL,
+    xr::HandJointEXT::RING_PROXIMAL, xr::HandJointEXT::MIDDLE_PROXIMAL,
+    xr::HandJointEXT::MIDDLE_PROXIMAL, xr::HandJointEXT::INDEX_PROXIMAL,
+    xr::HandJointEXT::INDEX_PROXIMAL, xr::HandJointEXT::THUMB_PROXIMAL,
+
+    xr::HandJointEXT::LITTLE_PROXIMAL, xr::HandJointEXT::LITTLE_INTERMEDIATE,
+    xr::HandJointEXT::LITTLE_INTERMEDIATE, xr::HandJointEXT::LITTLE_DISTAL,
+    xr::HandJointEXT::LITTLE_DISTAL, xr::HandJointEXT::LITTLE_TIP,
+
+    xr::HandJointEXT::RING_PROXIMAL, xr::HandJointEXT::RING_INTERMEDIATE,
+    xr::HandJointEXT::RING_INTERMEDIATE, xr::HandJointEXT::RING_DISTAL,
+    xr::HandJointEXT::RING_DISTAL, xr::HandJointEXT::RING_TIP,
+
+    xr::HandJointEXT::MIDDLE_PROXIMAL, xr::HandJointEXT::MIDDLE_INTERMEDIATE,
+    xr::HandJointEXT::MIDDLE_INTERMEDIATE, xr::HandJointEXT::MIDDLE_DISTAL,
+    xr::HandJointEXT::MIDDLE_DISTAL, xr::HandJointEXT::MIDDLE_TIP,
+
+    xr::HandJointEXT::INDEX_PROXIMAL, xr::HandJointEXT::INDEX_INTERMEDIATE,
+    xr::HandJointEXT::INDEX_INTERMEDIATE, xr::HandJointEXT::INDEX_DISTAL,
+    xr::HandJointEXT::INDEX_DISTAL, xr::HandJointEXT::INDEX_TIP,
+
+    xr::HandJointEXT::THUMB_PROXIMAL, xr::HandJointEXT::THUMB_DISTAL,
+    xr::HandJointEXT::THUMB_DISTAL, xr::HandJointEXT::THUMB_TIP,
+];
+
 #[derive(Clone, Copy)]
 struct Transform
 {
@@ -139,6 +184,18 @@ fn main()
         WHITE_CUBE.into_iter())
     .unwrap();
 
+    let hand_vertex_buffer = Buffer::from_iter(allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        HAND_LINES.map(|_| LineVertex { position: glam::Vec3::ZERO.to_array() }).into_iter())
+    .unwrap();
+
     let indices_buffer = Buffer::from_iter(allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::INDEX_BUFFER,
@@ -172,8 +229,7 @@ fn main()
     let mut transform = Transform::new(glam::vec3(0.0, 1.5, 0.0), glam::Quat::IDENTITY, glam::vec3(0.2, 0.2, 0.2));
     let mut cube_obb = OBB::new(glam::vec3(0.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
 
-    let mut tips : [Transform; 5] = [Transform::IDENTITY; 5];
-    let mut wrist : Transform = Transform::IDENTITY;
+    let mut hand : [Transform; 26] = [Transform::IDENTITY; 26];
 
     let mut wrist_last_frame : Option<Transform> = None;
 
@@ -269,7 +325,7 @@ fn main()
         {
             if let Some(hand_joint) = hand_joint_maybeuninit
             {
-                fn joint_to_transform(joint: &xr::HandJointLocationEXT) -> Transform
+                fn joint_to_transform(joint: xr::HandJointLocationEXT) -> Transform
                 {
                     let pos = joint.pose.position;
                     let rot = joint.pose.orientation;
@@ -282,24 +338,17 @@ fn main()
                     }
                 }
 
-                tips[0] = joint_to_transform(&hand_joint[xr::HandJoint::THUMB_TIP]);
-
-                tips[1] = joint_to_transform(&hand_joint[xr::HandJoint::LITTLE_TIP]);
-                tips[2] = joint_to_transform(&hand_joint[xr::HandJoint::RING_TIP]);
-                tips[3] = joint_to_transform(&hand_joint[xr::HandJoint::MIDDLE_TIP]);
-                tips[4] = joint_to_transform(&hand_joint[xr::HandJoint::INDEX_TIP]);
-
-                wrist = joint_to_transform(&hand_joint[xr::HandJoint::WRIST]);
+                hand = hand_joint.map(joint_to_transform);
 
                 {
-                    let thumb_obb = OBB::from_transform(&tips[0]);
+                    let thumb_obb = OBB::from_transform(&hand[xr::HandJointEXT::THUMB_TIP]);
                     let mut cube_snapping = false;
 
                     if thumb_obb.does_collide_with(&cube_obb)
                     {
-                        for i in 1..=4
+                        for tip in [xr::HandJointEXT::LITTLE_TIP, xr::HandJointEXT::RING_TIP, xr::HandJointEXT::MIDDLE_TIP, xr::HandJointEXT::INDEX_TIP]
                         {
-                            let tip_obb = OBB::from_transform(&tips[i]);
+                            let tip_obb = OBB::from_transform(&hand[tip]);
 
                             if tip_obb.does_collide_with(&cube_obb)
                             {
@@ -311,6 +360,8 @@ fn main()
 
                     if cube_snapping
                     {
+                        let wrist = hand[xr::HandJointEXT::WRIST];
+
                         if let Some(last_wirst) = wrist_last_frame
                         {
                             let wrist_to_cube = transform.pos - wrist.pos;
@@ -513,14 +564,14 @@ fn main()
 
         unsafe
         {
-            for &tip in tips.iter()
+            for tip in [xr::HandJointEXT::LITTLE_TIP, xr::HandJointEXT::RING_TIP, xr::HandJointEXT::MIDDLE_TIP, xr::HandJointEXT::INDEX_TIP, xr::HandJointEXT::THUMB_TIP]
             {
-                let tip_obb = OBB::from_transform(&tip);
+                let tip_obb = OBB::from_transform(&hand[tip]);
                 let does_collide = tip_obb.does_collide_with(&cube_obb);
 
                 builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
                 {
-                    transform: tip.to_mat4(),
+                    transform: hand[tip].to_mat4(),
                     tint: if does_collide { glam::vec4(0.0, 1.0, 0.0, 1.0) } else { glam::vec4(1.0, 0.0, 0.0, 1.0) },
                 }).unwrap();
 
@@ -529,6 +580,23 @@ fn main()
                        .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
                        .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
             }
+        }
+
+        builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
+
+        unsafe
+        {
+            (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
+
+            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            {
+                transform: glam::Mat4::IDENTITY,
+                tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
+            }).unwrap();
+
+            builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
+                .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
         }
 
         builder.end_render_pass(Default::default()).unwrap();
