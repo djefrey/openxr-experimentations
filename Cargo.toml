@@ -48,12 +48,18 @@ categories = [
 [[package.metadata.android.uses_feature]]
 name = "com.oculus.feature.PASSTHROUGH"
 required = true
-
 version = 1
+
 [[package.metadata.android.uses_feature]]
-name = "com.oculus.feature.CONTEXTUAL_BOUNDARYLESS_APP"
+name = "com.oculus.feature.BOUNDARYLESS_APP"
 required = true
 version = 1
 
 [[package.metadata.android.uses_permission]]
 name = "com.oculus.permission.HAND_TRACKING"
+
+# This signals to the Quest 2 / 3 to use the hand tracking (otherwise it will only work for a single frame)
+[[package.metadata.android.uses_feature]]
+name = "oculus.software.handtracking"
+required = true
+version = 1
