@@ -40,6 +40,8 @@ pub struct XRState
 
     #[cfg(target_os = "android")]
     pub passthrough: XRPasstrough,
+
+    pub depth_provider: xr::EnvironmentDepthProvider,
 }
 
 pub struct XRPasstrough
@@ -66,6 +68,7 @@ impl XRSetupState
             enabled_extensions.khr_android_create_instance = true;
             enabled_extensions.fb_passthrough = true;
             enabled_extensions.fb_composition_layer_alpha_blend = true;
+            enabled_extensions.meta_environment_depth = true;
         }
 
         let available_layers = entry.enumerate_layers().ok()?;
@@ -169,6 +172,10 @@ impl XRState
             }
         };
 
+        let depth_provider = session.create_depth_environment_provider(xr::EnvironmentDepthProviderCreateFlagsMETA::EMPTY).unwrap();
+        depth_provider.set_hand_removal(true);
+        depth_provider.start().unwrap();
+
         Some(XRState
         {
             instance,
@@ -188,7 +195,9 @@ impl XRState
             views,
 
             #[cfg(target_os = "android")]
-            passthrough
+            passthrough,
+
+            depth_provider,
         })
     }
 }

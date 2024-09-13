@@ -84,6 +84,14 @@ pub struct LineVertex
     pub position: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(BufferContents)]
+pub struct DepthUniformData
+{
+    pub left: glam::Mat4,
+    pub right: glam::Mat4
+}
+
 pub struct VulkanState
 {
     pub instance: Arc<Instance>,
@@ -93,7 +101,7 @@ pub struct VulkanState
     pub queue_family_index: u32,
     pub render_pass: Arc<RenderPass>,
     pub pipeline: Arc<GraphicsPipeline>,
-    pub line_pipeline: Arc<GraphicsPipeline>
+    pub line_pipeline: Arc<GraphicsPipeline>,
 }
 
 impl VulkanState
@@ -300,29 +308,6 @@ impl VulkanState
                 ..Default::default()
             }).unwrap();
 
-            // mod vs
-            // {
-            //     vulkano_shaders::shader! {
-            //         ty: "vertex",
-            //         src: r"
-            //             #version 450
-            //             #extension GL_EXT_multiview : require
-
-            //             layout(push_constant) uniform data { mat4 views[2]; } constants;
-
-            //             layout(location = 0) in vec3 position;
-            //             layout(location = 1) in vec3 color;
-
-            //             layout(location = 0) out vec3 outColor;
-
-            //             void main() {
-            //                 gl_Position = constants.views[gl_ViewIndex] * (vec4(position, 1) + vec4(0, 0, 3, 0));
-            //                 outColor = color;
-            //             }
-            //         "
-            //     }
-            // }
-
             mod vs
             {
                 vulkano_shaders::shader! {
@@ -346,10 +331,12 @@ impl VulkanState
                         layout(location = 1) in vec4 color;
 
                         layout(location = 0) out vec4 outColor;
+                        layout(location = 1) out vec4 outWorldPosition;
 
                         void main()
                         {
-                            gl_Position = global.proj[gl_ViewIndex] * object.transform * vec4(position, 1);
+                            outWorldPosition = object.transform * vec4(position, 1);
+                            gl_Position = global.proj[gl_ViewIndex] * outWorldPosition;
                             outColor = color * object.tint;
                         }
                     "
@@ -387,7 +374,50 @@ impl VulkanState
                 }
             }
 
+            // https://github.com/meta-quest/Meta-OpenXR-SDK/blob/1c060299abe66e325dec6f36a2d506fda52f31cc/Samples/XrSamples/XrPassthroughOcclusion/Src/XrPassthroughOcclusionGl.cpp#L614C1-L614C50
             mod fs
+            {
+                vulkano_shaders::shader! {
+                    ty: "fragment",
+                    src: r"
+                        #version 450
+                        #extension GL_EXT_multiview : require
+
+                        layout(set = 1, binding = 0) uniform DepthData
+                        {
+                            mat4 proj[2];
+                        } depth;
+
+                        layout(set = 1, binding = 1) uniform sampler2DArray depthTexture;
+
+                        layout(location = 0) in vec4 inColor;
+                        layout(location = 1) in vec4 inWorldPosition;
+
+                        layout(location = 0) out vec4 outColor;
+
+                        void main()
+                        {
+                            vec4 depthPos = depth.proj[gl_ViewIndex] * inWorldPosition;
+                            vec2 depthPosHC = ((depthPos.xy / depthPos.w) * 0.5 + 0.5);
+
+                            // Vulkan Y is inverted
+                            depthPosHC.y = 1.0 - depthPosHC.y;
+
+                            float envDepth = texture(depthTexture, vec3(depthPosHC, gl_ViewIndex)).r;
+                            float objDepth = depthPos.z / depthPos.w;
+
+                            if (objDepth >= envDepth)
+                            {
+                                discard;
+                            }
+
+                            outColor = inColor;
+                        }
+                    "
+                }
+            }
+
+            mod line_fs
             {
                 vulkano_shaders::shader! {
                     ty: "fragment",
@@ -469,7 +499,7 @@ impl VulkanState
                 let vs = line_vs::load(vulkano_device.clone()).unwrap()
                     .entry_point("main").unwrap();
 
-                let fs = fs::load(vulkano_device.clone()).unwrap()
+                let fs = line_fs::load(vulkano_device.clone()).unwrap()
                     .entry_point("main").unwrap();
 
                 let vertex_input_state = LineVertex::per_vertex().definition(&vs).unwrap();
@@ -531,7 +561,7 @@ impl VulkanState
                 queue_family_index,
                 render_pass,
                 pipeline,
-                line_pipeline
+                line_pipeline,
             })
         }
     }
