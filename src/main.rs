@@ -8,10 +8,12 @@ use vulkan::{BaseVertex, GlobalUniformData, LineVertex, ObjectData, VulkanState}
 mod openxr;
 mod vulkan;
 mod obb;
+mod ray;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 use obb::OBB;
+use ray::Ray;
 
 struct MyFramebuffer
 {
@@ -208,6 +210,18 @@ fn main()
         CUBE_INDICIES.into_iter())
     .unwrap();
 
+    let raycast_buffer = Buffer::from_iter(allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        vec![LineVertex { position: glam::Vec3::ZERO.to_array() }; 2].into_iter())
+    .unwrap();
+
     // let views_buffer = Buffer::new_sized::<ViewMatrices>(allocator.clone(),
     //     BufferCreateInfo {
     //         usage: BufferUsage::UNIFORM_BUFFER,
@@ -227,7 +241,8 @@ fn main()
     let mut i = 0;
 
     let mut transform = Transform::new(glam::vec3(0.0, 1.5, 0.0), glam::Quat::IDENTITY, glam::vec3(0.2, 0.2, 0.2));
-    let mut cube_obb = OBB::new(glam::vec3(0.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
+    let mut cube_obb = OBB::new(glam::vec3(2.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
+    let mut ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X);
 
     let mut hand : [Transform; 26] = [Transform::IDENTITY; 26];
 
@@ -339,10 +354,10 @@ fn main()
                 }
 
                 hand = hand_joint.map(joint_to_transform);
+                let mut cube_snapping = false;
 
                 {
                     let thumb_obb = OBB::from_transform(&hand[xr::HandJointEXT::THUMB_TIP]);
-                    let mut cube_snapping = false;
 
                     if thumb_obb.does_collide_with(&cube_obb)
                     {
@@ -352,12 +367,39 @@ fn main()
 
                             if tip_obb.does_collide_with(&cube_obb)
                             {
-                                cube_snapping = true;
+                                cube_snapping |= true;
                                 break;
                             }
                         }
                     }
+                }
 
+                {
+                    let middle_proximal = hand[xr::HandJointEXT::MIDDLE_PROXIMAL].pos;
+                    let wrist = hand[xr::HandJointEXT::WRIST].pos;
+                    let wrist_rot = hand[xr::HandJointEXT::WRIST].rot;
+
+                    // let index_tip = hand[xr::HandJointEXT::INDEX_TIP].pos;
+
+                    let start = (wrist + middle_proximal) / 2.0;
+                    let v = (wrist_rot * glam::Vec3::NEG_Z + wrist_rot * glam::Vec3::NEG_Y) / 2.0;
+
+                    ray = Ray::new_assume_normalize(start, v);
+
+                    (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
+                }
+
+                {
+                    let thumb_tip = hand[xr::HandJointEXT::THUMB_TIP].pos;
+                    let index_tip = hand[xr::HandJointEXT::INDEX_TIP].pos;
+
+                    if cube_obb.does_intersect(&ray) && thumb_tip.distance_squared(index_tip) < 0.0003
+                    {
+                        cube_snapping |= true;
+                    }
+                }
+
+                {
                     if cube_snapping
                     {
                         let wrist = hand[xr::HandJointEXT::WRIST];
@@ -597,6 +639,21 @@ fn main()
             builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
                 .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
                 .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
+        }
+
+        unsafe
+        {
+            let color = if cube_obb.does_intersect(&ray) { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
+
+            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            {
+                transform: glam::Mat4::IDENTITY,
+                tint: color,
+            }).unwrap();
+
+            builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
+                .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                .draw(2, 1, 0, 0).unwrap();
         }
 
         builder.end_render_pass(Default::default()).unwrap();

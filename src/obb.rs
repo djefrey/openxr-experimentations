@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 
 use glam::*;
 
-use crate::Transform;
+use crate::{ray::Ray, Transform};
 
 pub struct OBB
 {
@@ -86,6 +86,39 @@ impl OBB
         let other_computed = other.compute_obb();
 
         return self_computed.intersects(&other_computed);
+    }
+
+    pub fn does_intersect(&self, ray: &Ray) -> bool
+    {
+        let local_origin = self.rot.inverse() * (self.center - ray.origin);
+        let local_dir = self.rot.inverse() * -ray.dir;
+        let half_size = self.size / 2.0;
+
+        let axis = [
+            (
+                (-half_size.x - local_origin.x) / local_dir.x,
+                ( half_size.x - local_origin.x) / local_dir.x
+            ),
+            (
+                (-half_size.y - local_origin.y) / local_dir.y,
+                ( half_size.y - local_origin.y) / local_dir.y
+            ),
+            (
+                (-half_size.z - local_origin.z) / local_dir.z,
+                ( half_size.z - local_origin.z) / local_dir.z
+            )
+        ];
+
+        let mut t_min = f32::MIN;
+        let mut t_max = f32::MAX;
+
+        for (t1, t2) in axis
+        {
+            t_min = t_min.max(t1.min(t2));
+            t_max = t_max.min(t1.max(t2));
+        }
+
+        return t_max > t_min.max(0.0);
     }
 
     fn compute_obb(&self) -> ComputedOOB
