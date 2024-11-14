@@ -5,18 +5,18 @@ use glam::*;
 
 use crate::{ray::Ray, Transform};
 
+#[derive(Debug, Clone, Copy)]
 pub struct OBB
 {
-    pub center: Vec3,
-    pub size: Vec3,
-    pub rot: Quat
+    pub size: Vec3
 }
 
-struct ComputedOOB
+#[derive(Debug, Clone, Copy)]
+pub struct ComputedOOB
 {
-    x_normal: Vec3,
-    y_normal: Vec3,
-    z_normal: Vec3,
+    center: Vec3,
+    rot: Quat,
+    half_size: Vec3,
     vertices: [Vec3; 8]
 }
 
@@ -29,31 +29,14 @@ struct CollisionInterval
 
 impl OBB
 {
-    pub fn new(center: Vec3, size: Vec3, rot: Quat) -> Self
+    pub const CUBE_OBB : OBB = OBB { size: Vec3::ONE };
+
+    pub fn new(size: Vec3) -> Self
     {
         Self
         {
-            center,
-            size,
-            rot
+            size
         }
-    }
-
-    pub fn from_transform(transform: &Transform) -> Self
-    {
-        Self
-        {
-            center: transform.pos,
-            size: transform.size,
-            rot: transform.rot
-        }
-    }
-
-    pub fn set_center(&mut self, center: Vec3) -> &mut Self
-    {
-        self.center = center;
-
-        self
     }
 
     pub fn set_size(&mut self, size: Vec3) -> &mut Self
@@ -63,89 +46,31 @@ impl OBB
         self
     }
 
-    pub fn set_rot(&mut self, rot: Quat) -> &mut Self
+    pub fn compute_obb(&self, transform: &Transform) -> ComputedOOB
     {
-        self.rot = rot;
+        let x_normal = transform.rot.mul_vec3(Vec3::X);
+        let y_normal = transform.rot.mul_vec3(Vec3::Y);
+        let z_normal = transform.rot.mul_vec3(Vec3::Z);
 
-        self
-    }
-
-    pub fn update_from_transform(&mut self, transform: &Transform) -> &mut Self
-    {
-        self.center = transform.pos;
-        self.rot = transform.rot;
-        self.size = transform.size;
-
-        self
-    }
-
-    pub fn does_collide_with(&self, other: &OBB) -> bool
-    {
-        let rpos = other.center - self.center;
-        let self_computed = self.compute_obb();
-        let other_computed = other.compute_obb();
-
-        return self_computed.intersects(&other_computed);
-    }
-
-    pub fn does_intersect(&self, ray: &Ray) -> bool
-    {
-        let local_origin = self.rot.inverse() * (self.center - ray.origin);
-        let local_dir = self.rot.inverse() * -ray.dir;
-        let half_size = self.size / 2.0;
-
-        let axis = [
-            (
-                (-half_size.x - local_origin.x) / local_dir.x,
-                ( half_size.x - local_origin.x) / local_dir.x
-            ),
-            (
-                (-half_size.y - local_origin.y) / local_dir.y,
-                ( half_size.y - local_origin.y) / local_dir.y
-            ),
-            (
-                (-half_size.z - local_origin.z) / local_dir.z,
-                ( half_size.z - local_origin.z) / local_dir.z
-            )
-        ];
-
-        let mut t_min = f32::MIN;
-        let mut t_max = f32::MAX;
-
-        for (t1, t2) in axis
-        {
-            t_min = t_min.max(t1.min(t2));
-            t_max = t_max.min(t1.max(t2));
-        }
-
-        return t_max > t_min.max(0.0);
-    }
-
-    fn compute_obb(&self) -> ComputedOOB
-    {
-        let x_normal = self.rot.mul_vec3(Vec3::X);
-        let y_normal = self.rot.mul_vec3(Vec3::Y);
-        let z_normal = self.rot.mul_vec3(Vec3::Z);
-
-        let half = self.size / 2.0;
+        let half = self.size * transform.size / 2.0;
 
         let vertices : [Vec3; 8] =
         [
-            self.center + x_normal * half.x + y_normal * half.y + z_normal * half.z,
-            self.center - x_normal * half.x + y_normal * half.y + z_normal * half.z,
-            self.center + x_normal * half.x - y_normal * half.y + z_normal * half.z,
-            self.center + x_normal * half.x + y_normal * half.y - z_normal * half.z,
-            self.center - x_normal * half.x - y_normal * half.y + z_normal * half.z,
-            self.center - x_normal * half.x + y_normal * half.y - z_normal * half.z,
-            self.center + x_normal * half.x - y_normal * half.y - z_normal * half.z,
-            self.center - x_normal * half.x - y_normal * half.y - z_normal * half.z,
+            transform.pos + x_normal * half.x + y_normal * half.y + z_normal * half.z,
+            transform.pos - x_normal * half.x + y_normal * half.y + z_normal * half.z,
+            transform.pos + x_normal * half.x - y_normal * half.y + z_normal * half.z,
+            transform.pos + x_normal * half.x + y_normal * half.y - z_normal * half.z,
+            transform.pos - x_normal * half.x - y_normal * half.y + z_normal * half.z,
+            transform.pos - x_normal * half.x + y_normal * half.y - z_normal * half.z,
+            transform.pos + x_normal * half.x - y_normal * half.y - z_normal * half.z,
+            transform.pos - x_normal * half.x - y_normal * half.y - z_normal * half.z,
         ];
 
         ComputedOOB
         {
-            x_normal,
-            y_normal,
-            z_normal,
+            center: transform.pos,
+            rot: transform.rot,
+            half_size: half,
             vertices
         }
     }
@@ -153,29 +78,69 @@ impl OBB
 
 impl ComputedOOB
 {
-    fn intersects(&self, rhs: &ComputedOOB) -> bool
+    pub fn does_intersects_ray(&self, ray: &Ray) -> Option<f32>
     {
+        let local_origin = self.rot.inverse() * (self.center - ray.origin);
+        let local_dir = self.rot.inverse() * -ray.dir;
+
+        let axis = [
+            (
+                (-self.half_size.x - local_origin.x) / local_dir.x,
+                ( self.half_size.x - local_origin.x) / local_dir.x
+            ),
+            (
+                (-self.half_size.y - local_origin.y) / local_dir.y,
+                ( self.half_size.y - local_origin.y) / local_dir.y
+            ),
+            (
+                (-self.half_size.z - local_origin.z) / local_dir.z,
+                ( self.half_size.z - local_origin.z) / local_dir.z
+            )
+        ];
+
+        let mut t_enter = f32::MIN;
+        let mut t_exit = f32::MAX;
+
+        for (t1, t2) in axis
+        {
+            t_enter = t_enter.max(t1.min(t2));
+            t_exit  = t_exit.min(t1.max(t2));
+        }
+
+        return if t_enter <= t_exit && t_exit >= 0.0 { Some(t_enter) } else { None }
+    }
+
+    pub fn does_intersects_obb(&self, rhs: &ComputedOOB) -> bool
+    {
+        let lhs_x_normal = self.rot.mul_vec3(Vec3::X);
+        let lhs_y_normal = self.rot.mul_vec3(Vec3::Y);
+        let lhs_z_normal = self.rot.mul_vec3(Vec3::Z);
+
+        let rhs_x_normal = rhs.rot.mul_vec3(Vec3::X);
+        let rhs_y_normal = rhs.rot.mul_vec3(Vec3::Y);
+        let rhs_z_normal = rhs.rot.mul_vec3(Vec3::Z);
+
         let axes : [Vec3; 15] =
         [
-            self.x_normal,
-            self.y_normal,
-            self.z_normal,
+            lhs_x_normal,
+            lhs_y_normal,
+            lhs_z_normal,
 
-            rhs.x_normal,
-            rhs.y_normal,
-            rhs.z_normal,
+            rhs_x_normal,
+            rhs_y_normal,
+            rhs_z_normal,
 
-            self.x_normal.cross(rhs.x_normal),
-            self.x_normal.cross(rhs.y_normal),
-            self.x_normal.cross(rhs.z_normal),
+            lhs_x_normal.cross(rhs_x_normal),
+            lhs_x_normal.cross(rhs_y_normal),
+            lhs_x_normal.cross(rhs_z_normal),
 
-            self.y_normal.cross(rhs.x_normal),
-            self.y_normal.cross(rhs.y_normal),
-            self.y_normal.cross(rhs.z_normal),
+            lhs_y_normal.cross(rhs_x_normal),
+            lhs_y_normal.cross(rhs_y_normal),
+            lhs_y_normal.cross(rhs_z_normal),
 
-            self.z_normal.cross(rhs.x_normal),
-            self.z_normal.cross(rhs.y_normal),
-            self.z_normal.cross(rhs.z_normal),
+            lhs_z_normal.cross(rhs_x_normal),
+            lhs_z_normal.cross(rhs_y_normal),
+            lhs_z_normal.cross(rhs_z_normal),
         ];
 
         for axis in axes.into_iter()

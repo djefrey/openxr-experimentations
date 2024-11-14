@@ -1,7 +1,9 @@
 use core::f32;
-use std::{f32::consts::PI, sync::Arc, time::Instant};
+use std::{array, f32::consts::PI, sync::Arc, time::Instant};
 
-use glam::EulerRot;
+use gestures::{Gesture, GestureState, Hand, HandTip};
+use glam::{vec3, EulerRot, Quat, Vec3, Vec4};
+use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
 use vulkan::{BaseVertex, GlobalUniformData, LineVertex, ObjectData, VulkanState};
 
@@ -9,6 +11,8 @@ mod openxr;
 mod vulkan;
 mod obb;
 mod ray;
+mod gestures;
+mod object;
 
 use ::openxr::{self as xr, Duration, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
@@ -121,8 +125,8 @@ const HAND_LINES : [xr::HandJointEXT; 64] =
     xr::HandJointEXT::THUMB_DISTAL, xr::HandJointEXT::THUMB_TIP,
 ];
 
-#[derive(Clone, Copy)]
-struct Transform
+#[derive(Debug, Clone, Copy)]
+pub struct Transform
 {
     pub pos: glam::Vec3,
     pub rot: glam::Quat,
@@ -238,15 +242,26 @@ fn main()
     let mut swapchain : Option<MyFramebuffer> = None;
     let mut evt_storage = xr::EventDataBuffer::new();
     let mut running = false;
-    let mut i = 0;
 
-    let mut transform = Transform::new(glam::vec3(0.0, 1.5, 0.0), glam::Quat::IDENTITY, glam::vec3(0.2, 0.2, 0.2));
-    let mut cube_obb = OBB::new(glam::vec3(2.0, 1.5, 0.0), glam::vec3(0.2, 0.2, 0.2), glam::Quat::IDENTITY);
-    let mut ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X);
+    let mut hand : Option<Hand> = None;
 
-    let mut hand : [Transform; 26] = [Transform::IDENTITY; 26];
+    let mut obj_list = ObjectList::new();
+    let mut gestures = GestureState::new();
 
-    let mut wrist_last_frame : Option<Transform> = None;
+    let cube_id = obj_list.new_object(
+        ObjectKind::DebugCube,
+        Transform::new(vec3(0.0, 1.5, -1.0), Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
+        Some(OBB::CUBE_OBB)
+    );
+
+    let tip_ids : [ObjectID; 5] = array::from_fn(|_|
+    {
+        obj_list.new_object(
+            ObjectKind::TintedCube { tint: Vec4::ONE },
+            Transform::new(Vec3::ZERO, Quat::IDENTITY, vec3(0.03, 0.03, 0.03)),
+            None
+        )
+    });
 
     let mut last_frame : Instant = Instant::now();
 
@@ -299,134 +314,42 @@ fn main()
 
         let frame_state = xr_state.frame_waiter.wait().unwrap();
 
-        // let time_since_last_frame = Instant::now() - last_frame;
-        // let rot_value = (PI / 2.0) * time_since_last_frame.as_secs_f32();
+        hand = Hand::from_xr_state(&xr_state, frame_state.predicted_display_time);
 
-        // transform = transform.mul_mat4(&glam::Mat4::from_euler(EulerRot::XYX, rot_value, rot_value, 0.0));
-
-        // xr_state.session.sync_actions(&[(&xr_state.action_set).into()]).unwrap();
-
-        // let left_location = xr_state.left_space
-        //     .locate(&xr_state.stage, frame_state.predicted_display_time)
-        //     .unwrap();
-
-        // let right_location = xr_state.right_space
-        //     .locate(&xr_state.stage, frame_state.predicted_display_time)
-        //     .unwrap();
-
-        // println!("{:?} {:?}", left_location.pose.position, right_location.pose.position);
-
-        #[cfg(target_os = "android")]
+        for gesture in gestures.update(&hand, &obj_list)
         {
+            match gesture
+            {
+                Gesture::Tap { id } => todo!(),
+                Gesture::Drag { id } =>
+                {
+                    let obj = obj_list.get_mut_object(id).unwrap();
+
+                    if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
+                    {
+                        obj.transform.pos += diff.pos;
+                        obj.transform.rot = diff.rot * obj.transform.rot;
+                        // obj.transform.size *= diff.size;
+                    }
+                },
+            }
         }
 
-        // https://docs.unity3d.com/Packages/com.unity.xr.hands@1.4/manual/hand-data/xr-hand-data-model.html
-
-        // if let Ok(hand_joint_maybeuninit) = xr_state.stage.locate_hand_joints(&xr_state.hand_tracker, frame_state.predicted_display_time)
-        // {
-        //     if let Some(hand_joint) = hand_joint_maybeuninit
-        //     {
-        //         let joint = hand_joint[xr::HandJoint::MIDDLE_PROXIMAL];
-        //         let hand_pos = joint.pose.position;
-        //         let hand_rot = joint.pose.orientation;
-
-        //         transform = glam::Mat4::from_scale_rotation_translation(glam::vec3(0.1, 0.1, 0.1),
-        //                                                                 glam::quat(hand_rot.x, hand_rot.y, hand_rot.z, hand_rot.w),
-        //                                                                 glam::vec3(hand_pos.x, hand_pos.y, hand_pos.z));
-        //     }
-        // }
-
-        if let Ok(hand_joint_maybeuninit) = xr_state.stage.locate_hand_joints(&xr_state.hand_tracker, frame_state.predicted_display_time)
+        // DEBUG
+        for (i, &tip) in tip_ids.iter().enumerate()
         {
-            if let Some(hand_joint) = hand_joint_maybeuninit
-            {
-                fn joint_to_transform(joint: xr::HandJointLocationEXT) -> Transform
-                {
-                    let pos = joint.pose.position;
-                    let rot = joint.pose.orientation;
+            let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
+            let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
 
-                    Transform
-                    {
-                        pos: glam::vec3(pos.x, pos.y, pos.z),
-                        rot: glam::quat(rot.x, rot.y, rot.z, rot.w),
-                        size: glam::vec3(0.03, 0.03, 0.03)
-                    }
-                }
+            let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
+            let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
 
-                hand = hand_joint.map(joint_to_transform);
-                let mut cube_snapping = false;
+            let tint = if cube_obb.does_intersects_obb(&tip_obb) { Vec4::Y } else { Vec4::X };
+            let new_transform = hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
 
-                {
-                    let thumb_obb = OBB::from_transform(&hand[xr::HandJointEXT::THUMB_TIP]);
-
-                    if thumb_obb.does_collide_with(&cube_obb)
-                    {
-                        for tip in [xr::HandJointEXT::LITTLE_TIP, xr::HandJointEXT::RING_TIP, xr::HandJointEXT::MIDDLE_TIP, xr::HandJointEXT::INDEX_TIP]
-                        {
-                            let tip_obb = OBB::from_transform(&hand[tip]);
-
-                            if tip_obb.does_collide_with(&cube_obb)
-                            {
-                                cube_snapping |= true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                {
-                    let middle_proximal = hand[xr::HandJointEXT::MIDDLE_PROXIMAL].pos;
-                    let wrist = hand[xr::HandJointEXT::WRIST].pos;
-                    let wrist_rot = hand[xr::HandJointEXT::WRIST].rot;
-
-                    // let index_tip = hand[xr::HandJointEXT::INDEX_TIP].pos;
-
-                    let start = (wrist + middle_proximal) / 2.0;
-                    let v = (wrist_rot * glam::Vec3::NEG_Z + wrist_rot * glam::Vec3::NEG_Y) / 2.0;
-
-                    ray = Ray::new_assume_normalize(start, v);
-
-                    (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
-                }
-
-                {
-                    let thumb_tip = hand[xr::HandJointEXT::THUMB_TIP].pos;
-                    let index_tip = hand[xr::HandJointEXT::INDEX_TIP].pos;
-
-                    if cube_obb.does_intersect(&ray) && thumb_tip.distance_squared(index_tip) < 0.0003
-                    {
-                        cube_snapping |= true;
-                    }
-                }
-
-                {
-                    if cube_snapping
-                    {
-                        let wrist = hand[xr::HandJointEXT::WRIST];
-
-                        if let Some(last_wirst) = wrist_last_frame
-                        {
-                            let wrist_to_cube = transform.pos - wrist.pos;
-
-                            let diff_pos = wrist.pos - last_wirst.pos;
-                            let diff_rot = wrist.rot * last_wirst.rot.inverse();
-
-                            transform.pos += diff_pos;
-                            transform.rot = diff_rot.mul_quat(transform.rot);
-
-                            transform.pos += diff_rot.mul_vec3(wrist_to_cube) - wrist_to_cube;
-
-                            cube_obb.update_from_transform(&transform);
-                        }
-
-                        wrist_last_frame = Some(wrist);
-                    }
-                    else
-                    {
-                        wrist_last_frame = None;
-                    }
-                }
-            }
+            obj.transform.pos = new_transform.pos;
+            obj.transform.rot = new_transform.rot;
+            obj.kind = ObjectKind::TintedCube { tint };
         }
 
         // ---- Rendering -----
@@ -586,74 +509,89 @@ fn main()
             .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
             .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
-        i += 1;
-
         builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap();
 
         unsafe
         {
-            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            for (id, obj) in obj_list.iter()
             {
-                transform: transform.to_mat4(),
-                tint: glam::Vec4::ONE,
-            }).unwrap();
+                println!("Rendering object {:?}: {:?}", id, obj.kind);
 
-            builder.bind_vertex_buffers(0, [debug_cube_vertex_buffer.clone()]).unwrap()
-                   .bind_index_buffer(indices_buffer.clone()).unwrap()
-                   .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                   .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
-        }
-
-        unsafe
-        {
-            for tip in [xr::HandJointEXT::LITTLE_TIP, xr::HandJointEXT::RING_TIP, xr::HandJointEXT::MIDDLE_TIP, xr::HandJointEXT::INDEX_TIP, xr::HandJointEXT::THUMB_TIP]
-            {
-                let tip_obb = OBB::from_transform(&hand[tip]);
-                let does_collide = tip_obb.does_collide_with(&cube_obb);
-
-                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                match obj.kind
                 {
-                    transform: hand[tip].to_mat4(),
-                    tint: if does_collide { glam::vec4(0.0, 1.0, 0.0, 1.0) } else { glam::vec4(1.0, 0.0, 0.0, 1.0) },
-                }).unwrap();
+                    ObjectKind::DebugCube =>
+                    {
+                        builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                        {
+                            transform: obj.transform.to_mat4(),
+                            tint: glam::Vec4::ONE,
+                        }).unwrap();
 
-                builder.bind_vertex_buffers(0, [cube_vertex_buffer.clone()]).unwrap()
-                       .bind_index_buffer(indices_buffer.clone()).unwrap()
-                       .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                       .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+                        builder.bind_vertex_buffers(0, [debug_cube_vertex_buffer.clone()]).unwrap()
+                               .bind_index_buffer(indices_buffer.clone()).unwrap()
+                               .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                               .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+                    },
+
+                    ObjectKind::TintedCube { tint } =>
+                    {
+                        builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                        {
+                            transform: obj.transform.to_mat4(),
+                            tint,
+                        }).unwrap();
+
+                        builder.bind_vertex_buffers(0, [cube_vertex_buffer.clone()]).unwrap()
+                               .bind_index_buffer(indices_buffer.clone()).unwrap()
+                               .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                               .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+                    },
+                }
             }
         }
 
-        builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
+        // DEBUG
 
-        unsafe
+        if let Some(hand) = hand
         {
-            (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
+            builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
 
-            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            unsafe
             {
-                transform: glam::Mat4::IDENTITY,
-                tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
-            }).unwrap();
+                (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
 
-            builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
-                .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
-        }
+                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                {
+                    transform: glam::Mat4::IDENTITY,
+                    tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
+                }).unwrap();
 
-        unsafe
-        {
-            let color = if cube_obb.does_intersect(&ray) { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
+                builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                    .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
+            }
 
-            builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+            unsafe
             {
-                transform: glam::Mat4::IDENTITY,
-                tint: color,
-            }).unwrap();
+                let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
+                let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
 
-            builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
-                .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                .draw(2, 1, 0, 0).unwrap();
+                let ray = hand.compute_ray();
+                let does_intersects = cube_obb.does_intersects_ray(&ray).is_some();
+                let color = if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
+
+                (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
+
+                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                {
+                    transform: glam::Mat4::IDENTITY,
+                    tint: color,
+                }).unwrap();
+
+                builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                    .draw(2, 1, 0, 0).unwrap();
+            }
         }
 
         builder.end_render_pass(Default::default()).unwrap();
