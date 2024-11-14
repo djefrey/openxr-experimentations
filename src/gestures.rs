@@ -6,20 +6,54 @@ use openxr::{self as xr};
 
 use crate::{obb::OBB, object::{Object, ObjectID, ObjectList}, openxr::XRState, ray::Ray, Transform};
 
-pub enum Gesture
+#[derive(Debug, Clone)]
+pub enum GestureKind
 {
-    Tap { id: ObjectID },
-    Drag { id: ObjectID }
+    Tap { tips: Vec<HandTip> },
+    Grab { tips: Vec<HandTip> },
+    Ray,
+}
+
+impl PartialEq for GestureKind
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        match (self, other)
+        {
+            (Self::Tap { tips: _ } , Self::Tap { tips: _ }) => true,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GesturePhase
+{
+    Begin,
+    Entered,
+    Moved,
+    Exited,
+    Ended,
+}
+
+#[derive(Debug, Clone)]
+pub struct Gesture
+{
+    pub id: ObjectID,
+    pub kind: GestureKind,
+    pub phase: GesturePhase,
 }
 
 pub struct GestureState
 {
     previous_wrist: Option<Transform>,
     current_wrist: Option<Transform>,
+    current_interaction: Option<(ObjectID, GestureKind)>
 }
 
 pub struct Hand([Transform; 26]);
 
+#[derive(Debug, Clone, Copy)]
 pub struct HandTip(usize);
 impl HandTip
 {
@@ -137,23 +171,138 @@ impl GestureState
         Self
         {
             previous_wrist: None,
-            current_wrist: None
+            current_wrist: None,
+            current_interaction: None
         }
     }
 
     pub fn update(&mut self, hand: &Option<Hand>, list: &ObjectList) -> Vec<Gesture>
     {
+        let mut res = Vec::new();
+
         self.previous_wrist = self.current_wrist;
         self.current_wrist = hand.as_ref().and_then(|hand| Some(hand[xr::HandJointEXT::WRIST]));
 
         if let Some(hand) = hand
         {
-            return self.compute_gestures(hand, list);
+            if let Some((id, ref kind)) = self.current_interaction
+            {
+                if let Some(new_kind) = self.compute_interaction_with(id, hand, list)
+                {
+                    if *kind == new_kind
+                    {
+                        // Continue current interaction
+
+                        return vec![Gesture
+                        {
+                            id,
+                            kind: new_kind,
+                            phase: GesturePhase::Moved
+                        }];
+                    }
+                    else
+                    {
+                        // Interaction kind updates
+
+                        return vec![Gesture
+                        {
+                            id,
+                            kind: kind.clone(),
+                            phase: GesturePhase::Ended
+                        },
+                        Gesture
+                        {
+                            id,
+                            kind: new_kind,
+                            phase: GesturePhase::Begin
+                        }];
+                    }
+                }
+            }
+
+            if let Some(new) = self.check_for_new_interaction(hand, list)
+            {
+                let (id, ref kind) = new;
+
+                if let Some(current_interaction) = self.current_interaction.take()
+                {
+                    if current_interaction.1 == *kind
+                    {
+                        // Same interaction, different object
+
+                        res.push(Gesture
+                        {
+                            id: current_interaction.0,
+                            kind: kind.clone(),
+                            phase: GesturePhase::Exited
+                        });
+
+                        res.push(Gesture
+                        {
+                            id,
+                            kind: kind.clone(),
+                            phase: GesturePhase::Entered
+                        });
+                    }
+                    else
+                    {
+                        // Different interaction
+
+                        res.push(Gesture
+                        {
+                            id: current_interaction.0,
+                            kind: kind.clone(),
+                            phase: GesturePhase::Ended
+                        });
+
+                        res.push(Gesture
+                        {
+                            id,
+                            kind: kind.clone(),
+                            phase: GesturePhase::Begin
+                        });
+                    }
+                }
+                else
+                {
+                    // New interaction
+
+                    res.push(Gesture
+                    {
+                        id,
+                        kind: kind.clone(),
+                        phase: GesturePhase::Begin
+                    });
+                }
+
+                self.current_interaction = Some(new);
+            }
+            else if let Some(end_gesture) = self.end_current_interaction()
+            {
+                res.push(end_gesture);
+            }
         }
         else
         {
-            return Vec::new();
+            if let Some(end_gesture) = self.end_current_interaction()
+            {
+                res.push(end_gesture);
+            }
         }
+
+        return res;
+    }
+
+    fn end_current_interaction(&mut self) -> Option<Gesture>
+    {
+        let current = self.current_interaction.take()?;
+
+        return Some(Gesture
+        {
+            id: current.0,
+            kind: current.1,
+            phase: GesturePhase::Ended
+        });
     }
 
     pub fn transform_since_last_frame(&self, obj_origin: &Vec3) -> Option<Transform>
@@ -176,10 +325,8 @@ impl GestureState
         })
     }
 
-    fn compute_gestures(&mut self, hand: &Hand, list: &ObjectList) -> Vec<Gesture>
+    fn check_for_new_interaction(&mut self, hand: &Hand, list: &ObjectList) -> Option<(ObjectID, GestureKind)>
     {
-        let mut gestures : Vec<Gesture> = Vec::new();
-
         let tip_obbs = hand.tips().map(|transform| OBB::CUBE_OBB.compute_obb(&transform));
         let ray = hand.compute_ray();
 
@@ -217,46 +364,80 @@ impl GestureState
 
             let collisions = tip_obbs.map(|tip| tip.does_intersects_obb(&obj_obb));
 
+            let tips = collisions.into_iter()
+                .enumerate()
+                .filter(|(i, does_collide)| *does_collide)
+                .map(|(i, _)| HandTip(i))
+                .collect::<Vec<HandTip>>();
+
             if collisions[HandTip::THUMB.to_idx()]
             {
-                let mut is_grabbing = false;
-
                 for tip in [HandTip::INDEX, HandTip::MIDDLE, HandTip::RING, HandTip::LITTLE]
                 {
                     if collisions[tip.to_idx()]
                     {
-                        is_grabbing = true;
-                        break;
+                        return Some((id, GestureKind::Grab { tips }));
                     }
                 }
+            }
 
-                if is_grabbing
+            if collisions.contains(&true)
+            {
+                return Some((id, GestureKind::Tap { tips }))
+            }
+        }
+
+        if let Some((id, _)) = ray_hit
+        {
+            return Some((id, GestureKind::Ray));
+        }
+
+        return None;
+    }
+
+    fn compute_interaction_with(&self, id: ObjectID, hand: &Hand, list: &ObjectList) -> Option<GestureKind>
+    {
+        let obj = list.get_object(id)?;
+        let obj_obb = obj.compute_obb()?;
+
+        let tip_obbs = hand.tips().map(|transform| OBB::CUBE_OBB.compute_obb(&transform));
+        let collisions = tip_obbs.map(|tip| tip.does_intersects_obb(&obj_obb));
+
+        let tips = collisions.into_iter()
+            .enumerate()
+            .filter(|(i, does_collide)| *does_collide)
+            .map(|(i, _)| HandTip(i))
+            .collect::<Vec<HandTip>>();
+
+        if collisions[HandTip::THUMB.to_idx()]
+        {
+            for tip in [HandTip::INDEX, HandTip::MIDDLE, HandTip::RING, HandTip::LITTLE]
+            {
+                if collisions[tip.to_idx()]
                 {
-                    gestures.push(Gesture::Drag { id });
-                    continue 'obj_it;
+                    return Some(GestureKind::Grab { tips });
                 }
             }
         }
 
-        if let Some((hit, _)) = ray_hit
+        if collisions.contains(&true)
         {
-            let does_hit_not_have_gesture = gestures.iter().find(|g|
-            {
-                let &id = match g
-                {
-                    Gesture::Tap { id } => id,
-                    Gesture::Drag { id } => id
-                };
+            return Some(GestureKind::Tap { tips })
+        }
 
-                hit == id
-            }).is_none();
+        let ray = hand.compute_ray();
 
-            if does_hit_not_have_gesture
+        let thumb_tip = hand[xr::HandJointEXT::THUMB_TIP].pos;
+        let index_tip = hand[xr::HandJointEXT::INDEX_TIP].pos;
+
+        if thumb_tip.distance_squared(index_tip) < 0.0003
+        {
+            if obj_obb.does_intersects_ray(&ray).is_some()
             {
-                gestures.push(Gesture::Drag { id: hit });
+                return Some(GestureKind::Ray);
             }
         }
 
-        return gestures;
+        return None;
     }
 }

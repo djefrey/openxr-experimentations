@@ -80,8 +80,6 @@ impl<'a> Iterator for ObjectListIterator<'a>
 
     fn next(&mut self) -> Option<Self::Item>
     {
-        println!("Iterator: {} / {}", self.index, self.list.list.len());
-
         if self.index < self.list.list.len()
         {
             let res = Some((ObjectID(self.index), &self.list.list[self.index]));

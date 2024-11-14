@@ -1,7 +1,7 @@
 use core::f32;
 use std::{array, f32::consts::PI, sync::Arc, time::Instant};
 
-use gestures::{Gesture, GestureState, Hand, HandTip};
+use gestures::{Gesture, GestureKind, GestureState, Hand, HandTip};
 use glam::{vec3, EulerRot, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
@@ -263,7 +263,7 @@ fn main()
         )
     });
 
-    let show_debug = false;
+    let show_debug = true;
 
     let mut last_frame : Instant = Instant::now();
 
@@ -318,14 +318,17 @@ fn main()
 
         hand = Hand::from_xr_state(&xr_state, frame_state.predicted_display_time);
 
+        let mut colliding_tips : [bool; 5] = [false; 5];
+
         for gesture in gestures.update(&hand, &obj_list)
         {
-            match gesture
+            println!("Gesture: {:?}", gesture);
+
+            match gesture.kind
             {
-                Gesture::Tap { id } => todo!(),
-                Gesture::Drag { id } =>
+                GestureKind::Grab { tips: _} | GestureKind::Ray =>
                 {
-                    let obj = obj_list.get_mut_object(id).unwrap();
+                    let obj = obj_list.get_mut_object(gesture.id).unwrap();
 
                     if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
                     {
@@ -334,6 +337,19 @@ fn main()
                         // obj.transform.size *= diff.size;
                     }
                 },
+                _ => {}
+            }
+
+            match gesture.kind
+            {
+                GestureKind::Tap { tips } | GestureKind::Grab { tips } =>
+                {
+                    for tip in tips
+                    {
+                        colliding_tips[tip.to_idx()] = true;
+                    }
+                },
+                _ => {}
             }
         }
 
@@ -342,27 +358,9 @@ fn main()
         {
             for (i, &tip) in tip_ids.iter().enumerate()
             {
-                let does_collide = 'block: {
-                    let obj = obj_list.get_object(tip).expect("Could not get tip");
-                    let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
-
-                    for cube_id in cube_ids
-                    {
-                        let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
-                        let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
-
-                        if tip_obb.does_intersects_obb(&cube_obb)
-                        {
-                            break 'block true;
-                        }
-                    }
-
-                    false
-                };
-
                 let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
 
-                let tint = if does_collide { Vec4::Y } else { Vec4::X };
+                let tint = if colliding_tips[i] { Vec4::Y } else { Vec4::X };
                 let new_transform = hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
 
                 obj.transform.pos = new_transform.pos;
@@ -534,8 +532,6 @@ fn main()
         {
             for (id, obj) in obj_list.iter()
             {
-                println!("Rendering object {:?}: {:?}", id, obj.kind);
-
                 match obj.kind
                 {
                     ObjectKind::DebugCube =>
