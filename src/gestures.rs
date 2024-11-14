@@ -103,7 +103,7 @@ impl Hand
         let wrist = self[xr::HandJointEXT::WRIST].pos;
         let wrist_rot = self[xr::HandJointEXT::WRIST].rot;
 
-        let start = (wrist + middle_proximal) / 2.0;
+        let start = wrist * 0.25 + middle_proximal * 0.75;
         let v = (wrist_rot * glam::Vec3::NEG_Z + wrist_rot * glam::Vec3::NEG_Y) / 2.0;
 
         return Ray::new_assume_normalize(start, v);

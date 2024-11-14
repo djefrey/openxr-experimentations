@@ -263,6 +263,8 @@ fn main()
         )
     });
 
+    let show_debug = false;
+
     let mut last_frame : Instant = Instant::now();
 
 'main_loop: loop
@@ -336,34 +338,37 @@ fn main()
         }
 
         // DEBUG
-        for (i, &tip) in tip_ids.iter().enumerate()
+        if show_debug
         {
-            let does_collide = 'block: {
-                let obj = obj_list.get_object(tip).expect("Could not get tip");
-                let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
+            for (i, &tip) in tip_ids.iter().enumerate()
+            {
+                let does_collide = 'block: {
+                    let obj = obj_list.get_object(tip).expect("Could not get tip");
+                    let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
 
-                for cube_id in cube_ids
-                {
-                    let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
-                    let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
-
-                    if tip_obb.does_intersects_obb(&cube_obb)
+                    for cube_id in cube_ids
                     {
-                        break 'block true;
+                        let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
+                        let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
+
+                        if tip_obb.does_intersects_obb(&cube_obb)
+                        {
+                            break 'block true;
+                        }
                     }
-                }
 
-                false
-            };
+                    false
+                };
 
-            let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
+                let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
 
-            let tint = if does_collide { Vec4::Y } else { Vec4::X };
-            let new_transform = hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
+                let tint = if does_collide { Vec4::Y } else { Vec4::X };
+                let new_transform = hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
 
-            obj.transform.pos = new_transform.pos;
-            obj.transform.rot = new_transform.rot;
-            obj.kind = ObjectKind::TintedCube { tint };
+                obj.transform.pos = new_transform.pos;
+                obj.transform.rot = new_transform.rot;
+                obj.kind = ObjectKind::TintedCube { tint };
+            }
         }
 
         // ---- Rendering -----
@@ -566,58 +571,61 @@ fn main()
 
         // DEBUG
 
-        if let Some(hand) = hand
+        if show_debug
         {
-            builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
-
-            unsafe
+            if let Some(hand) = hand
             {
-                (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
+                builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
 
-                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                unsafe
                 {
-                    transform: glam::Mat4::IDENTITY,
-                    tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
-                }).unwrap();
+                    (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
 
-                builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
-                    .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                    .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
-            }
-
-            unsafe
-            {
-                let ray = hand.compute_ray();
-
-                let does_intersects = 'block: {
-
-                    for cube_id in cube_ids
+                    builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
                     {
-                        let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
-                        let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
+                        transform: glam::Mat4::IDENTITY,
+                        tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
+                    }).unwrap();
 
-                        if cube_obb.does_intersects_ray(&ray).is_some()
-                        {
-                            break 'block true;
-                        }
-                    }
+                    builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
+                        .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                        .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
+                }
 
-                    false
-                };
-
-                let color = if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
-
-                (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
-
-                builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                unsafe
                 {
-                    transform: glam::Mat4::IDENTITY,
-                    tint: color,
-                }).unwrap();
+                    let ray = hand.compute_ray();
 
-                builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
-                    .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                    .draw(2, 1, 0, 0).unwrap();
+                    let does_intersects = 'block: {
+
+                        for cube_id in cube_ids
+                        {
+                            let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
+                            let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
+
+                            if cube_obb.does_intersects_ray(&ray).is_some()
+                            {
+                                break 'block true;
+                            }
+                        }
+
+                        false
+                    };
+
+                    let color = if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
+
+                    (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
+
+                    builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                    {
+                        transform: glam::Mat4::IDENTITY,
+                        tint: color,
+                    }).unwrap();
+
+                    builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
+                        .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
+                        .draw(2, 1, 0, 0).unwrap();
+                }
             }
         }
 
