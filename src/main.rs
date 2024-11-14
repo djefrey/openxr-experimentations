@@ -248,11 +248,11 @@ fn main()
     let mut obj_list = ObjectList::new();
     let mut gestures = GestureState::new();
 
-    let cube_id = obj_list.new_object(
+    let cube_ids : [ObjectID; 5] = array::from_fn(|i| obj_list.new_object(
         ObjectKind::DebugCube,
-        Transform::new(vec3(0.0, 1.5, -1.0), Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
+        Transform::new(vec3(0.0, 1.5, -1.0 - (i as f32) * 0.5), Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
         Some(OBB::CUBE_OBB)
-    );
+    ));
 
     let tip_ids : [ObjectID; 5] = array::from_fn(|_|
     {
@@ -338,13 +338,27 @@ fn main()
         // DEBUG
         for (i, &tip) in tip_ids.iter().enumerate()
         {
-            let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
+            let does_collide = 'block: {
+                let obj = obj_list.get_object(tip).expect("Could not get tip");
+                let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
+
+                for cube_id in cube_ids
+                {
+                    let cube_transform = obj_list.get_object(cube_id).expect("Could not get cube ID").transform;
+                    let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
+
+                    if tip_obb.does_intersects_obb(&cube_obb)
+                    {
+                        break 'block true;
+                    }
+                }
+
+                false
+            };
+
             let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
 
-            let cube_obb = OBB::CUBE_OBB.compute_obb(&cube_transform);
-            let tip_obb = OBB::CUBE_OBB.compute_obb(&obj.transform);
-
-            let tint = if cube_obb.does_intersects_obb(&tip_obb) { Vec4::Y } else { Vec4::X };
+            let tint = if does_collide { Vec4::Y } else { Vec4::X };
             let new_transform = hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
 
             obj.transform.pos = new_transform.pos;
@@ -573,11 +587,24 @@ fn main()
 
             unsafe
             {
-                let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
-                let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
-
                 let ray = hand.compute_ray();
-                let does_intersects = cube_obb.does_intersects_ray(&ray).is_some();
+
+                let does_intersects = 'block: {
+
+                    for cube_id in cube_ids
+                    {
+                        let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
+                        let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
+
+                        if cube_obb.does_intersects_ray(&ray).is_some()
+                        {
+                            break 'block true;
+                        }
+                    }
+
+                    false
+                };
+
                 let color = if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
 
                 (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
