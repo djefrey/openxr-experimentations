@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, ptr::null};
 
-use openxr::{self as xr, CompositionLayerBase, Extent2Di, Hand, Passthrough, PassthroughFlagsFB, PassthroughLayerPurposeFB};
-use vulkano::{swapchain, Handle, VulkanObject};
+use openxr::{self as xr, CompositionLayerBase, Hand, PassthroughFlagsFB, PassthroughLayerPurposeFB};
+use vulkano::{Handle, VulkanObject};
 
 use crate::vulkan::VulkanState;
 

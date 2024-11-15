@@ -1,8 +1,8 @@
 use core::f32;
-use std::{array, f32::consts::PI, sync::Arc, time::Instant};
+use std::{array, sync::Arc, time::Instant};
 
-use gestures::{Gesture, GestureKind, GesturePhase, GestureState, Hand, HandTip};
-use glam::{vec3, EulerRot, Quat, Vec3, Vec4};
+use gestures::{GestureKind, GesturePhase, GestureState, Hand};
+use glam::{vec3, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
 use vulkan::{BaseVertex, GlobalUniformData, LineVertex, ObjectData, VulkanState};
@@ -14,10 +14,9 @@ mod ray;
 mod gestures;
 mod object;
 
-use ::openxr::{self as xr, Duration, ViewConfigurationType};
-use vulkano::{buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}, CommandBuffer, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageMemory, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::{allocator::{AllocationCreateInfo, DeviceLayout, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, DedicatedAllocation, ResourceMemory}, pipeline::{graphics::{depth_stencil::CompareOp, viewport::{Scissor, Viewport}}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
+use ::openxr::{self as xr, ViewConfigurationType};
+use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 use obb::OBB;
-use ray::Ray;
 
 struct MyFramebuffer
 {
@@ -159,7 +158,7 @@ fn main()
     println!("MAAAAAAAIN");
 
     let setup_xr = XRSetupState::init().unwrap();
-    let mut vk_state = VulkanState::from_xr(&setup_xr).unwrap();
+    let vk_state = VulkanState::from_xr(&setup_xr).unwrap();
     let mut xr_state = XRState::init(setup_xr, &vk_state).unwrap();
 
     let allocator = Arc::new(StandardMemoryAllocator::new_default(vk_state.device.clone()));
@@ -533,7 +532,7 @@ fn main()
 
         unsafe
         {
-            for (id, obj) in obj_list.iter()
+            for (_, obj) in obj_list.iter()
             {
                 match obj.kind
                 {

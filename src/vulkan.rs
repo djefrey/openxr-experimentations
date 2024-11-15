@@ -1,9 +1,8 @@
-use std::{default, ffi::CStr, marker::PhantomData, mem::transmute, sync::Arc};
+use std::{ffi::CStr, mem::transmute, sync::Arc};
 
 use buffer::BufferContents;
-use image::ImageAspects;
-use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState, DepthStencilStateFlags}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
-use vulkano::{*, library::*, instance::*, device::*, device::physical::*, render_pass::*};
+use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::{*, instance::*, device::*, device::physical::*, render_pass::*};
 use ash::vk::{self, Handle};
 
 use crate::openxr::XRSetupState;
@@ -191,7 +190,7 @@ impl VulkanState
             let queue_family_index = instance.get_physical_device_queue_family_properties(pdevice)
                 .into_iter()
                 .enumerate()
-                .position(|(i, info)|
+                .position(|(_, info)|
                 {
                     info.queue_flags.contains(ash::vk::QueueFlags::GRAPHICS)
                 })

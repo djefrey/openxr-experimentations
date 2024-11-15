@@ -4,7 +4,7 @@ use glam::Vec3;
 
 use openxr::{self as xr};
 
-use crate::{obb::OBB, object::{Object, ObjectID, ObjectList}, openxr::XRState, ray::Ray, Transform};
+use crate::{obb::OBB, object::{ObjectID, ObjectList}, openxr::XRState, ray::Ray, Transform};
 
 #[derive(Debug, Clone)]
 pub enum GestureKind
@@ -341,7 +341,7 @@ impl GestureState
         let should_check_ray_hit = thumb_tip.distance_squared(index_tip) < 0.0003;
         let mut ray_hit : Option<(ObjectID, f32)> = None;
 
-        'obj_it:for (id, obj) in list.iter()
+        for (id, obj) in list.iter()
         {
             let Some(obj_obb) = obj.compute_obb() else { continue; };
 
@@ -371,7 +371,7 @@ impl GestureState
 
             let tips = collisions.into_iter()
                 .enumerate()
-                .filter(|(i, does_collide)| *does_collide)
+                .filter(|(_, does_collide)| *does_collide)
                 .map(|(i, _)| HandTip(i))
                 .collect::<Vec<HandTip>>();
 
@@ -410,7 +410,7 @@ impl GestureState
 
         let tips = collisions.into_iter()
             .enumerate()
-            .filter(|(i, does_collide)| *does_collide)
+            .filter(|(_, does_collide)| *does_collide)
             .map(|(i, _)| HandTip(i))
             .collect::<Vec<HandTip>>();
 
