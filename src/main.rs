@@ -1,7 +1,7 @@
 use core::f32;
 use std::{array, f32::consts::PI, sync::Arc, time::Instant};
 
-use gestures::{Gesture, GestureKind, GestureState, Hand, HandTip};
+use gestures::{Gesture, GestureKind, GesturePhase, GestureState, Hand, HandTip};
 use glam::{vec3, EulerRot, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
@@ -324,20 +324,23 @@ fn main()
         {
             println!("Gesture: {:?}", gesture);
 
-            match gesture.kind
+            if gesture.phase != GesturePhase::Cancelled
             {
-                GestureKind::Grab { tips: _} | GestureKind::Ray =>
+                match gesture.kind
                 {
-                    let obj = obj_list.get_mut_object(gesture.id).unwrap();
-
-                    if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
+                    GestureKind::Grab { tips: _} | GestureKind::Ray =>
                     {
-                        obj.transform.pos += diff.pos;
-                        obj.transform.rot = diff.rot * obj.transform.rot;
-                        // obj.transform.size *= diff.size;
-                    }
-                },
-                _ => {}
+                        let obj = obj_list.get_mut_object(gesture.id).unwrap();
+
+                        if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
+                        {
+                            obj.transform.pos += diff.pos;
+                            obj.transform.rot = diff.rot * obj.transform.rot;
+                            // obj.transform.size *= diff.size;
+                        }
+                    },
+                    _ => {}
+                }
             }
 
             match gesture.kind

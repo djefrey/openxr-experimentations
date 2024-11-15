@@ -26,7 +26,7 @@ impl PartialEq for GestureKind
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GesturePhase
 {
     Begin,
@@ -34,6 +34,7 @@ pub enum GesturePhase
     Moved,
     Exited,
     Ended,
+    Cancelled
 }
 
 #[derive(Debug, Clone)]
@@ -277,14 +278,18 @@ impl GestureState
 
                 self.current_interaction = Some(new);
             }
-            else if let Some(end_gesture) = self.end_current_interaction()
+            else if let Some(end_gesture) = self.end_current_interaction(false)
             {
+                // No current interaction
+
                 res.push(end_gesture);
             }
         }
         else
         {
-            if let Some(end_gesture) = self.end_current_interaction()
+            // Hand lost
+
+            if let Some(end_gesture) = self.end_current_interaction(true)
             {
                 res.push(end_gesture);
             }
@@ -293,7 +298,7 @@ impl GestureState
         return res;
     }
 
-    fn end_current_interaction(&mut self) -> Option<Gesture>
+    fn end_current_interaction(&mut self, cancelled: bool) -> Option<Gesture>
     {
         let current = self.current_interaction.take()?;
 
@@ -301,7 +306,7 @@ impl GestureState
         {
             id: current.0,
             kind: current.1,
-            phase: GesturePhase::Ended
+            phase: if !cancelled { GesturePhase::Ended } else { GesturePhase::Cancelled }
         });
     }
 
