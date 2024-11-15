@@ -89,19 +89,33 @@ impl Hand
 
     pub fn from_xr_state(xr: &XRState, predicted_time: xr::Time) -> Option<Hand>
     {
-        let res = xr.stage.locate_hand_joints(&xr.hand_tracker, predicted_time).ok()??
-            .map(|joint|
-            {
-                let pos = joint.pose.position;
-                let rot = joint.pose.orientation;
+        let data = xr.stage.locate_hand_joints(&xr.hand_tracker, predicted_time).ok()??;
 
-                Transform
-                {
-                    pos: glam::vec3(pos.x, pos.y, pos.z),
-                    rot: glam::quat(rot.x, rot.y, rot.z, rot.w),
-                    size: glam::vec3(0.03, 0.03, 0.03)
-                }
-            });
+        fn is_joint_invalid<'a>(joint: &'a &xr::HandJointLocationEXT) -> bool
+        {
+            !(
+                joint.location_flags.contains(xr::SpaceLocationFlags::POSITION_VALID)
+                && joint.location_flags.contains(xr::SpaceLocationFlags::ORIENTATION_VALID)
+            )
+        }
+
+        if data.iter().find(is_joint_invalid).is_some()
+        {
+            return None;
+        }
+
+        let res = data.map(|joint|
+        {
+            let pos = joint.pose.position;
+            let rot = joint.pose.orientation;
+
+            Transform
+            {
+                pos: glam::vec3(pos.x, pos.y, pos.z),
+                rot: glam::quat(rot.x, rot.y, rot.z, rot.w),
+                size: glam::vec3(0.03, 0.03, 0.03)
+            }
+        });
 
         Some(Hand(res))
     }
