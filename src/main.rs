@@ -5,7 +5,8 @@ use gestures::{GestureKind, GesturePhase, GestureState, Hand};
 use glam::{vec3, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
-use vulkan::{BaseVertex, GlobalUniformData, LineVertex, ObjectData, VulkanState};
+use ray::Ray;
+use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, VulkanState};
 
 mod openxr;
 mod vulkan;
@@ -18,111 +19,6 @@ use ::openxr::{self as xr, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 use obb::OBB;
 
-struct MyFramebuffer
-{
-    handle: xr::Swapchain<xr::Vulkan>,
-    frames: Vec<(Arc<Framebuffer>, Arc<ImageView>, Arc<ImageView>)>,
-    global_uniforms: Vec<(Subbuffer<GlobalUniformData>, Arc<DescriptorSet>)>,
-}
-
-const TRIANGLE_VERTICES : [BaseVertex; 3] = [
-    BaseVertex { position: [0.0, 0.0, 0.0], color: [1.0, 0.0, 0.0] },
-    BaseVertex { position: [1.0, 0.0, 0.0], color: [0.0, 1.0, 0.0] },
-    BaseVertex { position: [0.0, 1.0, 0.0], color: [0.0, 0.0, 1.0] },
-];
-
-const DEBUG_CUBE : [BaseVertex; 8] = [
-    // BOT
-    BaseVertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 0.0] },
-    BaseVertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 0.0] },
-    BaseVertex { position: [-0.5, -0.5,  0.5], color: [0.0, 0.0, 1.0] },
-    BaseVertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 1.0, 0.0] },
-
-    // TOP
-    BaseVertex { position: [-0.5,  0.5, -0.5], color: [1.0, 0.0, 1.0] },
-    BaseVertex { position: [ 0.5,  0.5, -0.5], color: [0.0, 1.0, 1.0] },
-    BaseVertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 0.0] },
-];
-
-const WHITE_CUBE : [BaseVertex; 8] = [
-    // BOT
-    BaseVertex { position: [-0.5, -0.5, -0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [ 0.5, -0.5, -0.5], color: [1.0, 1.0, 0.0] },
-    BaseVertex { position: [-0.5, -0.5,  0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 1.0, 1.0] },
-
-    // TOP
-    BaseVertex { position: [-0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
-    BaseVertex { position: [ 0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
-];
-
-const CUBE_INDICIES : [u16; 36] = [
-    2, 6, 7,
-    2, 7, 3,
-
-    0, 5, 4,
-    0, 1, 5,
-
-    0, 6, 2,
-    0, 4, 6,
-
-    1, 3, 7,
-    1, 7, 5,
-
-    0, 2, 3,
-    0, 3, 1,
-
-    4, 7, 6,
-    4, 5, 7,
-];
-
-
-const HAND_LINES : [xr::HandJointEXT; 64] =
-[
-    xr::HandJointEXT::WRIST, xr::HandJointEXT::LITTLE_METACARPAL,
-    xr::HandJointEXT::WRIST, xr::HandJointEXT::RING_METACARPAL,
-    xr::HandJointEXT::WRIST, xr::HandJointEXT::MIDDLE_METACARPAL,
-    xr::HandJointEXT::WRIST, xr::HandJointEXT::INDEX_METACARPAL,
-    xr::HandJointEXT::WRIST, xr::HandJointEXT::THUMB_METACARPAL,
-
-    xr::HandJointEXT::LITTLE_METACARPAL, xr::HandJointEXT::RING_METACARPAL,
-    xr::HandJointEXT::RING_METACARPAL, xr::HandJointEXT::MIDDLE_METACARPAL,
-    xr::HandJointEXT::MIDDLE_METACARPAL, xr::HandJointEXT::INDEX_METACARPAL,
-    xr::HandJointEXT::INDEX_METACARPAL, xr::HandJointEXT::THUMB_METACARPAL,
-
-    xr::HandJointEXT::LITTLE_METACARPAL, xr::HandJointEXT::LITTLE_PROXIMAL,
-    xr::HandJointEXT::RING_METACARPAL, xr::HandJointEXT::RING_PROXIMAL,
-    xr::HandJointEXT::MIDDLE_METACARPAL, xr::HandJointEXT::MIDDLE_PROXIMAL,
-    xr::HandJointEXT::INDEX_METACARPAL, xr::HandJointEXT::INDEX_PROXIMAL,
-    xr::HandJointEXT::THUMB_METACARPAL, xr::HandJointEXT::THUMB_PROXIMAL,
-
-    xr::HandJointEXT::LITTLE_PROXIMAL, xr::HandJointEXT::RING_PROXIMAL,
-    xr::HandJointEXT::RING_PROXIMAL, xr::HandJointEXT::MIDDLE_PROXIMAL,
-    xr::HandJointEXT::MIDDLE_PROXIMAL, xr::HandJointEXT::INDEX_PROXIMAL,
-    xr::HandJointEXT::INDEX_PROXIMAL, xr::HandJointEXT::THUMB_PROXIMAL,
-
-    xr::HandJointEXT::LITTLE_PROXIMAL, xr::HandJointEXT::LITTLE_INTERMEDIATE,
-    xr::HandJointEXT::LITTLE_INTERMEDIATE, xr::HandJointEXT::LITTLE_DISTAL,
-    xr::HandJointEXT::LITTLE_DISTAL, xr::HandJointEXT::LITTLE_TIP,
-
-    xr::HandJointEXT::RING_PROXIMAL, xr::HandJointEXT::RING_INTERMEDIATE,
-    xr::HandJointEXT::RING_INTERMEDIATE, xr::HandJointEXT::RING_DISTAL,
-    xr::HandJointEXT::RING_DISTAL, xr::HandJointEXT::RING_TIP,
-
-    xr::HandJointEXT::MIDDLE_PROXIMAL, xr::HandJointEXT::MIDDLE_INTERMEDIATE,
-    xr::HandJointEXT::MIDDLE_INTERMEDIATE, xr::HandJointEXT::MIDDLE_DISTAL,
-    xr::HandJointEXT::MIDDLE_DISTAL, xr::HandJointEXT::MIDDLE_TIP,
-
-    xr::HandJointEXT::INDEX_PROXIMAL, xr::HandJointEXT::INDEX_INTERMEDIATE,
-    xr::HandJointEXT::INDEX_INTERMEDIATE, xr::HandJointEXT::INDEX_DISTAL,
-    xr::HandJointEXT::INDEX_DISTAL, xr::HandJointEXT::INDEX_TIP,
-
-    xr::HandJointEXT::THUMB_PROXIMAL, xr::HandJointEXT::THUMB_DISTAL,
-    xr::HandJointEXT::THUMB_DISTAL, xr::HandJointEXT::THUMB_TIP,
-];
 
 #[derive(Debug, Clone, Copy)]
 pub struct Transform
@@ -155,95 +51,16 @@ impl Transform
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main()
 {
-    println!("MAAAAAAAIN");
-
     let setup_xr = XRSetupState::init().unwrap();
-    let vk_state = VulkanState::from_xr(&setup_xr).unwrap();
+    let mut vk_state = VulkanState::from_xr(&setup_xr).unwrap();
     let mut xr_state = XRState::init(setup_xr, &vk_state).unwrap();
 
-    let allocator = Arc::new(StandardMemoryAllocator::new_default(vk_state.device.clone()));
-    let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(vk_state.device.clone(), Default::default()));
-    let desc_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(vk_state.device.clone(), StandardDescriptorSetAllocatorCreateInfo::default()));
-
-    let debug_cube_vertex_buffer = Buffer::from_iter(allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        DEBUG_CUBE.into_iter())
-    .unwrap();
-
-    let cube_vertex_buffer = Buffer::from_iter(allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        WHITE_CUBE.into_iter())
-    .unwrap();
-
-    let hand_vertex_buffer = Buffer::from_iter(allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        HAND_LINES.map(|_| LineVertex { position: glam::Vec3::ZERO.to_array() }).into_iter())
-    .unwrap();
-
-    let indices_buffer = Buffer::from_iter(allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::INDEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        CUBE_INDICIES.into_iter())
-    .unwrap();
-
-    let raycast_buffer = Buffer::from_iter(allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        vec![LineVertex { position: glam::Vec3::ZERO.to_array() }; 2].into_iter())
-    .unwrap();
-
-    // let views_buffer = Buffer::new_sized::<ViewMatrices>(allocator.clone(),
-    //     BufferCreateInfo {
-    //         usage: BufferUsage::UNIFORM_BUFFER,
-    //         ..Default::default()
-    //     },
-    //     AllocationCreateInfo {
-    //         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-    //         ..Default::default()
-    //     })
-    // .unwrap();
-
-    // views_buffer.write();
-
-    let mut swapchain : Option<MyFramebuffer> = None;
     let mut evt_storage = xr::EventDataBuffer::new();
     let mut running = false;
 
     let mut hand : Option<Hand> = None;
 
+    let mut swapchain: Option<VulkanSwapchain> = None;
     let mut obj_list = ObjectList::new();
     let mut gestures = GestureState::new();
 
@@ -261,6 +78,24 @@ fn main()
             None
         )
     });
+
+    let hand_id = obj_list.new_object(ObjectKind::Hand
+        {
+            hand: Hand::IDENTITY,
+            buffer: vk_state.buffers.new_hand_wireframe_buffer()
+        },
+        Transform::IDENTITY,
+        None
+    );
+
+    let raycast_id = obj_list.new_object(ObjectKind::Raycast
+        {
+            ray: Ray::X,
+            buffer: vk_state.buffers.new_raycast_buffer()
+        },
+        Transform::IDENTITY,
+        None
+    );
 
     let show_debug = true;
 
@@ -369,6 +204,24 @@ fn main()
                 obj.transform.rot = new_transform.rot;
                 obj.kind = ObjectKind::TintedCube { tint };
             }
+
+            {
+                let hand_obj = obj_list.get_mut_object(hand_id).expect("Could not get hand obj");
+
+                // yes this builds, even if rust-analyzer says otherwise
+                let ObjectKind::Hand { hand: obj_hand, buffer } = &mut hand_obj.kind else { panic!("Hand object is not hand") };
+
+                *obj_hand = hand.unwrap_or(Hand::IDENTITY);
+            }
+
+            {
+                let raycast_obj = obj_list.get_mut_object(raycast_id).expect("Could not get raycast obj");
+
+                // yes this builds, even if rust-analyzer says otherwise
+                let ObjectKind::Raycast { ray, buffer } = &mut raycast_obj.kind else { panic!("Hand object is not hand") };
+
+                *ray = hand.and_then(|hand| Some(hand.compute_ray())).unwrap_or(Ray::X);
+            }
         }
 
         // ---- Rendering -----
@@ -384,131 +237,13 @@ fn main()
         let width  = xr_state.views[0].recommended_image_rect_width;
         let height = xr_state.views[0].recommended_image_rect_height;
 
-        let swapchain = swapchain.get_or_insert_with(||
-        {
-            let swapchain_handle = xr_state.session.create_swapchain(&xr::SwapchainCreateInfo
-            {
-                create_flags: xr::SwapchainCreateFlags::EMPTY,
-                usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT | xr::SwapchainUsageFlags::SAMPLED,
-                format: vulkano::format::Format::R8G8B8A8_SRGB as u32,
-                sample_count: 1,
-                width,
-                height,
-                face_count: 1,
-                array_size: 2,
-                mip_count: 1
-            }).unwrap();
+        let mut swapchain = swapchain.get_or_insert_with(|| VulkanSwapchain::new(&xr_state, &vk_state));
 
-            let image_handles = swapchain_handle.enumerate_images().unwrap();
-            let frames = image_handles.into_iter().map(|img_handle|
-            {
-                let img = unsafe
-                {
-                    RawImage::from_handle(vk_state.device.clone(), ash::vk::Image::from_raw(img_handle), vulkano::image::ImageCreateInfo
-                    {
-                        flags: ImageCreateFlags::empty(),
-                        usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
-                        format: vulkano::format::Format::R8G8B8A8_SRGB,
-                        samples: vulkano::image::SampleCount::Sample1,
-                        extent: [width, height, 2],
-                        mip_levels: 1,
-                        array_layers: 2,
-                        tiling: ImageTiling::Optimal,
-                        image_type: ImageType::Dim2d,
-                        ..Default::default()
-                    }).unwrap()
-                    .assume_bound() // session.create_swapchain already allocated the memory
-                };
-
-                let view = ImageView::new(Arc::new(img), ImageViewCreateInfo
-                {
-                    format: vulkano::format::Format::R8G8B8A8_SRGB,
-                    view_type: vulkano::image::view::ImageViewType::Dim2dArray,
-                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
-                    subresource_range: ImageSubresourceRange
-                    {
-                        aspects: ImageAspects::COLOR,
-                        array_layers: 0..2,
-                        mip_levels: 0..1,
-                    },
-                    ..Default::default()
-                }).unwrap();
-
-                let depth_img = image::Image::new(allocator.clone(), ImageCreateInfo
-                {
-                    format: format::Format::D32_SFLOAT,
-                    tiling: ImageTiling::Optimal,
-                    image_type: ImageType::Dim2d,
-                    extent: [width, height, 1],
-                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-                    initial_layout: ImageLayout::Undefined,
-                    array_layers: 2,
-                    ..Default::default()
-                }, AllocationCreateInfo
-                {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                    ..Default::default()
-                }).unwrap();
-
-                let depth_view = ImageView::new(depth_img, ImageViewCreateInfo
-                {
-                    format: format::Format::D32_SFLOAT,
-                    view_type: ImageViewType::Dim2dArray,
-                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-                    subresource_range: ImageSubresourceRange
-                    {
-                        aspects: ImageAspects::DEPTH,
-                        array_layers: 0..2,
-                        mip_levels: 0..1,
-                    },
-                    ..Default::default()
-                }).unwrap();
-
-                let framebuffer = Framebuffer::new(vk_state.render_pass.clone(), FramebufferCreateInfo
-                {
-                    flags: FramebufferCreateFlags::empty(),
-                    extent: [width, height],
-                    attachments: vec![view.clone(), depth_view.clone()],
-                    layers: 1,
-                    ..Default::default()
-                }).unwrap();
-
-                (framebuffer, view, depth_view)
-            }).collect::<Vec<_>>();
-
-            let global_uniforms = frames.iter().map(|_|
-            {
-                let buffer = Buffer::new_sized::<GlobalUniformData>(allocator.clone(),
-                    BufferCreateInfo
-                    {
-                        usage: BufferUsage::UNIFORM_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo
-                    {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    }
-                ).unwrap();
-
-                let desc = DescriptorSet::new(
-                    desc_set_allocator.clone(),
-                    vk_state.pipeline.layout().set_layouts()[0].clone(),
-                    [WriteDescriptorSet::buffer(0, buffer.clone())],
-                    []
-                ).unwrap();
-
-                (buffer, desc)
-            }).collect::<Vec<_>>();
-
-            MyFramebuffer { handle: swapchain_handle, frames, global_uniforms }
-        });
-
-        let img_idx = swapchain.handle.acquire_image().unwrap() as usize;
+        swapchain.next_frame();
 
         // Writing Command Buffer
 
-        let mut builder = RecordingCommandBuffer::new(cmd_allocator.clone(),
+        let mut builder = RecordingCommandBuffer::new(vk_state.allocators.cmd.clone(),
                                                       vk_state.queue_family_index,
                                                       CommandBufferLevel::Primary,
                                                       CommandBufferBeginInfo{ usage: CommandBufferUsage::OneTimeSubmit, ..Default::default() }).unwrap();
@@ -517,7 +252,7 @@ fn main()
                 RenderPassBeginInfo
                 {
                     clear_values: vec![Some(ClearValue::Float([0.0, 0.0, 0.0, 0.0])), Some(ClearValue::Depth(1.0))],
-                    ..RenderPassBeginInfo::framebuffer(swapchain.frames[img_idx].0.clone())
+                    ..RenderPassBeginInfo::framebuffer(swapchain.get_framebuffer().clone())
                 },
                 SubpassBeginInfo
                 {
@@ -528,101 +263,38 @@ fn main()
             .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
             .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
-        builder.bind_pipeline_graphics(vk_state.pipeline.clone()).unwrap();
-
         unsafe
         {
-            for (_, obj) in obj_list.iter()
+'top:       for (_, obj) in obj_list.iter()
             {
-                match obj.kind
+                match &obj.kind
                 {
                     ObjectKind::DebugCube =>
                     {
-                        builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
-                        {
-                            transform: obj.transform.to_mat4(),
-                            tint: glam::Vec4::ONE,
-                        }).unwrap();
-
-                        builder.bind_vertex_buffers(0, [debug_cube_vertex_buffer.clone()]).unwrap()
-                               .bind_index_buffer(indices_buffer.clone()).unwrap()
-                               .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                               .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+                        vk_state.render_debug_cube(obj, swapchain, &mut builder);
                     },
-
                     ObjectKind::TintedCube { tint } =>
                     {
-                        builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
-                        {
-                            transform: obj.transform.to_mat4(),
-                            tint,
-                        }).unwrap();
-
-                        builder.bind_vertex_buffers(0, [cube_vertex_buffer.clone()]).unwrap()
-                               .bind_index_buffer(indices_buffer.clone()).unwrap()
-                               .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                               .draw_indexed(CUBE_INDICIES.len() as u32, 1, 0, 0, 0).unwrap();
+                        vk_state.render_tinted_cube(obj, tint, swapchain, &mut builder);
                     },
-                }
-            }
-        }
-
-        // DEBUG
-
-        if show_debug
-        {
-            if let Some(hand) = hand
-            {
-                builder.bind_pipeline_graphics(vk_state.line_pipeline.clone()).unwrap();
-
-                unsafe
-                {
-                    (*hand_vertex_buffer.write().unwrap()).copy_from_slice(&HAND_LINES.map(|idx| LineVertex { position: hand[idx].pos.to_array() }));
-
-                    builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                    ObjectKind::Hand { hand, buffer } =>
                     {
-                        transform: glam::Mat4::IDENTITY,
-                        tint: glam::vec4(0.0, 0.0, 1.0, 0.0),
-                    }).unwrap();
+                        if !show_debug { continue 'top; }
 
-                    builder.bind_vertex_buffers(0, [hand_vertex_buffer.clone()]).unwrap()
-                        .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                        .draw(HAND_LINES.len() as u32, 1, 0, 0).unwrap();
-                }
+                        let tint = glam::vec4(0.0, 0.0, 1.0, 1.0);
 
-                unsafe
-                {
-                    let ray = hand.compute_ray();
-
-                    let does_intersects = 'block: {
-
-                        for cube_id in cube_ids
-                        {
-                            let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
-                            let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
-
-                            if cube_obb.does_intersects_ray(&ray).is_some()
-                            {
-                                break 'block true;
-                            }
-                        }
-
-                        false
-                    };
-
-                    let color = if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
-
-                    (*raycast_buffer.write().unwrap()).copy_from_slice(&ray.to_points(5.0).map(|p| LineVertex { position: p.to_array() }));
-
-                    builder.push_constants(vk_state.pipeline.layout().clone(), 0, ObjectData
+                        vk_state.buffers.update_hand_wireframe_buffer(buffer, hand);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, swapchain, &mut builder);
+                    },
+                    ObjectKind::Raycast { ray, buffer } =>
                     {
-                        transform: glam::Mat4::IDENTITY,
-                        tint: color,
-                    }).unwrap();
+                        if !show_debug { continue 'top; }
 
-                    builder.bind_vertex_buffers(0, [raycast_buffer.clone()]).unwrap()
-                        .bind_descriptor_sets(PipelineBindPoint::Graphics, vk_state.pipeline.layout().clone(), 0, swapchain.global_uniforms[img_idx].1.clone()).unwrap()
-                        .draw(2, 1, 0, 0).unwrap();
+                        let tint = get_raycast_tint(ray, &cube_ids, &obj_list);
+
+                        vk_state.buffers.update_raycast_buffer(buffer, ray);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, swapchain, &mut builder);
+                    },
                 }
             }
         }
@@ -668,20 +340,19 @@ fn main()
 
         // Global uniform buffer is updated at the last moment to use the most accurate view matrix possible
 
-        let uniform_subbuffer = &swapchain.global_uniforms[img_idx].0;
-        *uniform_subbuffer.write().unwrap() = GlobalUniformData
+        swapchain.update_global_unform(&GlobalUniformData
         {
             left: view_to_matrix(&views[0]),
             right: view_to_matrix(&views[1])
-        };
+        });
 
-        swapchain.handle.wait_image(xr::Duration::INFINITE).unwrap();
+        swapchain.wait_frame();
 
         let _ = cmd_buffer.execute(vk_state.queue.clone()).unwrap()
             .then_signal_fence_and_flush().unwrap()
             .wait(None).unwrap();
 
-        swapchain.handle.release_image().unwrap();
+        swapchain.release_frame();
 
         let rect = xr::Rect2Di
         {
@@ -719,4 +390,25 @@ fn main()
 
         // println!("Frame displayed");
     }
+}
+
+fn get_raycast_tint(ray: &Ray, cube_ids: &[ObjectID], obj_list: &ObjectList) -> glam::Vec4
+{
+    let does_intersects = 'block: {
+
+        for &cube_id in cube_ids
+        {
+            let cube = obj_list.get_object(cube_id).expect("Could not get cube ID");
+            let cube_obb = OBB::CUBE_OBB.compute_obb(&cube.transform);
+
+            if cube_obb.does_intersects_ray(&ray).is_some()
+            {
+                break 'block true;
+            }
+        }
+
+        false
+    };
+
+    return if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
 }

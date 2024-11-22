@@ -1,15 +1,17 @@
 use glam::Vec4;
 
-use crate::{obb::{ComputedOOB, OBB}, Transform};
+use crate::{gestures::Hand, obb::{ComputedOOB, OBB}, ray::Ray, vulkan::buffers::{HandBuffer, RaycastBuffer}, Transform};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd)]
 pub struct ObjectID(usize);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ObjectKind
 {
     DebugCube,
-    TintedCube { tint: Vec4 }
+    TintedCube { tint: Vec4 },
+    Hand { hand: Hand, buffer: HandBuffer },
+    Raycast { ray: Ray, buffer: RaycastBuffer }
 }
 
 pub struct Object

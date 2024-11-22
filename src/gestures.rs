@@ -52,6 +52,7 @@ pub struct GestureState
     current_interaction: Option<(ObjectID, GestureKind)>
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Hand([Transform; 26]);
 
 #[derive(Debug, Clone, Copy)]

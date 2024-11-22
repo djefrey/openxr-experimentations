@@ -109,8 +109,6 @@ impl XRState
         let instance = setup.instance;
         let system_id = setup.system_id;
 
-        println!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-
         let environment_blend_mode = instance.enumerate_environment_blend_modes(system_id, VIEW_TYPE).ok()?[0];
 
         let (session, frame_waiter, frame_stream) = unsafe { instance.create_session::<xr::Vulkan>(system_id, &vulkan.to_session_create_infos()).ok()? };
