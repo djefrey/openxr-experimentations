@@ -6,7 +6,7 @@ use glam::{vec3, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
 use ray::Ray;
-use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, VulkanState};
+use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, texture::VulkanTexture, VulkanState};
 
 mod openxr;
 mod vulkan;
@@ -69,6 +69,32 @@ fn main()
         Transform::new(vec3(0.0, 1.5, -1.0 - (i as f32) * 0.5), Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
         Some(OBB::CUBE_OBB)
     ));
+
+    let bmp_data : [u8; 27] = [
+        // TOP
+        255,   0,   0,
+          0, 255,   0,
+          0,   0, 255,
+
+        // MIDDLE
+        255, 255,  0,
+        255,   0, 255,
+        0,   255, 255,
+
+        // BOTTOM
+          0,   0,  0,
+        255, 255, 255,
+        127, 127, 127
+
+    ];
+
+    let quad_id = obj_list.new_object(ObjectKind::TexturedQuad
+        {
+            texture: VulkanTexture::new_pixelated_rgb(3, 3, &bmp_data, &vk_state)
+        },
+        Transform::new(vec3(2.0, 1.5, -1.0), Quat::IDENTITY, vec3(1.0, 1.0, 1.0)),
+        Some(OBB::new(Vec3::new(1.0, 1.0, 0.001)))
+    );
 
     let tip_ids : [ObjectID; 5] = array::from_fn(|_|
     {
@@ -224,6 +250,43 @@ fn main()
             }
         }
 
+        // Update textured quad
+        // Really not optimal (as buffer should be reused) but good enough for testing
+        // Should ONLY be called on update (as it is an expensive operation)
+        // {
+        //     let width : u32 = 4;
+        //     let height : u32 = 2;
+        //     let data : [u8; 4 * 2 * 3] = [
+        //         // TOP
+        //         255,   0,   0,
+        //           0, 255,   0,
+        //           0,   0, 255,
+        //           0,   0,  0,
+
+        //         255, 255,  0,
+        //         255,   0, 255,
+        //         0,   255, 255,
+        //         255, 255, 255,
+        //     ];
+
+        //     let obj = obj_list.get_mut_object(quad_id).expect("Could not get quad obj");
+        //     let ObjectKind::TexturedQuad { texture } = &mut obj.kind else { panic!("Quad object is not a textured quad") };
+
+
+        //     // new_rgb => texture will be sampled and interpolated linearly when magnified or minified
+        //     // new_pixelated_rgb => texture will be sampled to be rendered like Minecraft
+        //     *texture = VulkanTexture::new_pixelated_rgb(width, height, &data, &vk_state);
+
+        //     // Update quad aspect ratio
+
+        //     let aspect_ratio = (width as f32) / (height as f32) ;
+
+        //     let x_scale : f32 = 1.0;
+        //     let y_scale : f32 = x_scale / aspect_ratio;
+
+        //     obj.transform.size = vec3(x_scale, y_scale, 1.0);
+        // }
+
         // ---- Rendering -----
 
         xr_state.frame_stream.begin().unwrap();
@@ -276,6 +339,10 @@ fn main()
                     ObjectKind::TintedCube { tint } =>
                     {
                         vk_state.render_tinted_cube(obj, tint, swapchain, &mut builder);
+                    },
+                    ObjectKind::TexturedQuad { texture } =>
+                    {
+                        vk_state.render_textured_quad(obj, texture, swapchain, &mut builder);
                     },
                     ObjectKind::Hand { hand, buffer } =>
                     {

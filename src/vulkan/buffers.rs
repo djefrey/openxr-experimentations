@@ -43,6 +43,13 @@ const WHITE_CUBE : [TintedVertex; 8] = [
     TintedVertex { position: [ 0.5,  0.5,  0.5], color: [1.0, 1.0, 1.0] },
 ];
 
+const QUAD : [TexturedVertex; 4] = [
+    TexturedVertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0] }, // BOT LEFT
+    TexturedVertex { position: [-0.5,  0.5, 0.0], uv: [0.0, 0.0] }, // TOP LEFT
+    TexturedVertex { position: [ 0.5, -0.5, 0.0], uv: [1.0, 1.0] }, // BOT RIGHT
+    TexturedVertex { position: [ 0.5,  0.5, 0.0], uv: [1.0, 0.0] }, // TOP RIGHT
+];
+
 const CUBE_INDICIES : [u16; 36] = [
     2, 6, 7,
     2, 7, 3,
@@ -61,6 +68,11 @@ const CUBE_INDICIES : [u16; 36] = [
 
     4, 7, 6,
     4, 5, 7,
+];
+
+const QUAD_INDICES : [u16; 6] = [
+    0, 1, 2,
+    2, 1, 3
 ];
 
 const HAND_LINES : [xr::HandJointEXT; 64] =
@@ -128,6 +140,16 @@ pub struct TintedVertex
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Vertex, bytemuck::Pod, bytemuck::Zeroable)] // BufferContents impl by Pod + Zeroable
+pub struct TexturedVertex
+{
+    #[format(R32G32B32_SFLOAT)]
+    pub position: [f32; 3],
+    #[format(R32G32_SFLOAT)]
+    pub uv: [f32; 2]
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Vertex, bytemuck::Pod, bytemuck::Zeroable)] // BufferContents impl by Pod + Zeroable
 pub struct LineVertex
 {
     #[format(R32G32B32_SFLOAT)]
@@ -146,6 +168,8 @@ pub struct VulkanBuffers
     pub debug_cube_vertex: Subbuffer<[TintedVertex]>,
     pub cube_vertex: Subbuffer<[TintedVertex]>,
     pub cube_index: Subbuffer<[u16]>,
+    pub quad_vertex: Subbuffer<[TexturedVertex]>,
+    pub quad_index: Subbuffer<[u16]>,
 }
 
 impl VulkanBuffers
@@ -190,12 +214,38 @@ impl VulkanBuffers
             CUBE_INDICIES.into_iter())
         .unwrap();
 
+        let quad_vertex_buffer = Buffer::from_iter(std.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            QUAD.into_iter())
+        .unwrap();
+
+        let quad_index_buffer = Buffer::from_iter(std.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::INDEX_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            QUAD_INDICES.into_iter())
+        .unwrap();
+
         Self
         {
             std_alloc: std.clone(),
             debug_cube_vertex: debug_cube_vertex_buffer,
             cube_vertex: cube_vertex_buffer,
             cube_index: cube_index_buffer,
+            quad_vertex: quad_vertex_buffer,
+            quad_index: quad_index_buffer
         }
     }
 }

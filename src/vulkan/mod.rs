@@ -3,12 +3,15 @@ use std::{ffi::CStr, mem::transmute, sync::Arc};
 use buffer::{BufferContents, Subbuffer};
 use buffers::{LineVertex, TintedObjectData, VulkanBuffers};
 use command_buffer::{allocator::StandardCommandBufferAllocator, RecordingCommandBuffer};
-use descriptor_set::allocator::StandardDescriptorSetAllocator;
+use descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet};
+use glam::vec4;
+use image::{sampler::{self, Sampler, SamplerAddressMode, SamplerCreateInfo}, sys::RawImage, view::{ImageView, ImageViewType}, Image, ImageAspects, ImageCreateInfo, ImageFormatInfo, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage};
 use memory::allocator::StandardMemoryAllocator;
 use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use pipelines::VulkanPipelines;
 use swapchain::VulkanSwapchain;
-use vulkano::{*, instance::*, device::*, device::physical::*, render_pass::*};
+use texture::VulkanTexture;
+use vulkano::{*, format::Format, instance::*, device::*, device::physical::*, render_pass::*};
 use ash::vk::{self, Handle};
 
 use crate::{object::{Object, ObjectKind}, openxr::{XRSetupState, XRState}, Transform};
@@ -16,6 +19,7 @@ use crate::{object::{Object, ObjectKind}, openxr::{XRSetupState, XRState}, Trans
 pub mod buffers;
 pub mod pipelines;
 pub mod swapchain;
+pub mod texture;
 
 pub struct VulkanAllocators
 {
@@ -32,6 +36,8 @@ pub struct VulkanState
     pub queue: Arc<Queue>,
     pub queue_family_index: u32,
     pub render_pass: Arc<RenderPass>,
+    pub sampler: Arc<Sampler>,
+    pub nearest_sampler: Arc<Sampler>,
     pub allocators: VulkanAllocators,
     pub buffers: VulkanBuffers,
     pub pipelines: VulkanPipelines,
@@ -180,6 +186,26 @@ impl VulkanState
                 ..Default::default()
             }).unwrap();
 
+            let sampler = Sampler::new( vulkano_device.clone(), SamplerCreateInfo
+                {
+                    mag_filter: sampler::Filter::Linear,
+                    min_filter: sampler::Filter::Linear,
+                    mipmap_mode: sampler::SamplerMipmapMode::Nearest,
+                    address_mode: [SamplerAddressMode::ClampToEdge, SamplerAddressMode::ClampToEdge, SamplerAddressMode::ClampToEdge],
+                    mip_lod_bias: 0.0,
+                    ..Default::default()
+                }).unwrap();
+
+            let nearest_sampler = Sampler::new( vulkano_device.clone(), SamplerCreateInfo
+            {
+                mag_filter: sampler::Filter::Nearest,
+                min_filter: sampler::Filter::Nearest,
+                mipmap_mode: sampler::SamplerMipmapMode::Nearest,
+                address_mode: [SamplerAddressMode::ClampToEdge, SamplerAddressMode::ClampToEdge, SamplerAddressMode::ClampToEdge],
+                mip_lod_bias: 0.0,
+                ..Default::default()
+            }).unwrap();
+
             let allocators = VulkanAllocators::new(&vulkano_device);
             let buffers = VulkanBuffers::new(&allocators);
             let pipelines = VulkanPipelines::new(&vulkano_device, &render_pass);
@@ -192,6 +218,8 @@ impl VulkanState
                 queue,
                 queue_family_index,
                 render_pass,
+                sampler,
+                nearest_sampler,
                 allocators,
                 buffers,
                 pipelines,
@@ -258,6 +286,31 @@ impl VulkanState
         builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
                .bind_index_buffer(index.clone()).unwrap()
                .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, swapchain.get_global_uniform_descriptor().clone()).unwrap()
+               .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
+    }
+
+    pub unsafe fn render_textured_quad(&self, obj: &Object, texture: &VulkanTexture, swapchain: &VulkanSwapchain, builder: &mut RecordingCommandBuffer)
+    {
+        let pipeline = &self.pipelines.textured;
+        let layout = pipeline.layout();
+        let vertex = &self.buffers.quad_vertex;
+        let index = &self.buffers.quad_index;
+
+        builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+
+        builder.push_constants(layout.clone(), 0, TintedObjectData
+        {
+            transform: obj.transform.to_mat4(),
+            tint: vec4(1.0, 1.0, 1.0, 1.0),
+        }).unwrap();
+
+        builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
+               .bind_index_buffer(index.clone()).unwrap()
+               .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
+                vec![
+                    swapchain.get_global_uniform_descriptor().clone(),
+                    texture.desc.clone(),
+                ]).unwrap()
                .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
     }
 
