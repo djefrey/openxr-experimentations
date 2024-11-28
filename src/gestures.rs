@@ -203,7 +203,7 @@ impl GestureState
         {
             if let Some((id, ref kind)) = self.current_interaction
             {
-                if let Some(new_kind) = self.compute_interaction_with(id, hand, list)
+                if let Some(new_kind) = GestureState::compute_interaction_with(id, hand, list)
                 {
                     if *kind == new_kind
                     {
@@ -236,7 +236,7 @@ impl GestureState
                 }
             }
 
-            if let Some(new) = self.check_for_new_interaction(hand, list)
+            if let Some(new) = GestureState::check_for_new_interaction(hand, list)
             {
                 let (id, ref kind) = new;
 
@@ -345,7 +345,7 @@ impl GestureState
         })
     }
 
-    fn check_for_new_interaction(&mut self, hand: &Hand, list: &ObjectList) -> Option<(ObjectID, GestureKind)>
+    pub fn check_for_new_interaction(hand: &Hand, list: &ObjectList) -> Option<(ObjectID, GestureKind)>
     {
         let tip_obbs = hand.tips().map(|transform| OBB::CUBE_OBB.compute_obb(&transform));
         let ray = hand.compute_ray();
@@ -415,7 +415,7 @@ impl GestureState
         return None;
     }
 
-    fn compute_interaction_with(&self, id: ObjectID, hand: &Hand, list: &ObjectList) -> Option<GestureKind>
+    pub fn compute_interaction_with(id: ObjectID, hand: &Hand, list: &ObjectList) -> Option<GestureKind>
     {
         let obj = list.get_object(id)?;
         let obj_obb = obj.compute_obb()?;
