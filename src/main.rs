@@ -2,11 +2,11 @@ use core::f32;
 use std::{array, sync::Arc, time::Instant};
 
 use gestures::{GestureKind, GesturePhase, GestureState, Hand};
-use glam::{vec3, Quat, Vec3, Vec4};
+use glam::{vec3, vec4, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
 use ray::Ray;
-use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, texture::VulkanTexture, VulkanState};
+use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, texture::VulkanTexture, RenderState, VulkanState};
 
 mod openxr;
 mod vulkan;
@@ -14,10 +14,12 @@ mod obb;
 mod ray;
 mod gestures;
 mod object;
+mod window;
 
 use ::openxr::{self as xr, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBufferBeginInfo, CommandBufferLevel, CommandBufferUsage, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::GpuFuture, Handle};
 use obb::OBB;
+use window::{Window, WindowEvent};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -88,12 +90,19 @@ fn main()
 
     ];
 
-    let quad_id = obj_list.new_object(ObjectKind::TexturedQuad
-        {
-            texture: VulkanTexture::new_pixelated_rgb(3, 3, &bmp_data, &vk_state)
-        },
-        Transform::new(vec3(2.0, 1.5, -1.0), Quat::IDENTITY, vec3(1.0, 1.0, 1.0)),
-        Some(OBB::new(Vec3::new(1.0, 1.0, 0.001)))
+    // let quad_id = obj_list.new_object(ObjectKind::TexturedQuad
+    //     {
+    //         texture: VulkanTexture::new_pixelated_rgb(3, 3, &bmp_data, &vk_state)
+    //     },
+    //     Transform::new(vec3(2.0, 1.5, -1.0), Quat::IDENTITY, vec3(1.0, 1.0, 1.0)),
+    //     Some(OBB::new(Vec3::new(1.0, 1.0, 0.001)))
+    // );
+
+    let window_id = Window::new(
+        "Test Window".to_string(),
+        VulkanTexture::new_pixelated_rgb(3, 3, &bmp_data, &vk_state),
+        vec3(0.0, 0.5, 0.0), Quat::IDENTITY,
+        &mut obj_list
     );
 
     let tip_ids : [ObjectID; 5] = array::from_fn(|_|
@@ -184,32 +193,62 @@ fn main()
         {
             println!("Gesture: {:?}", gesture);
 
-            if gesture.phase != GesturePhase::Cancelled
-            {
-                match gesture.kind
-                {
-                    GestureKind::Grab { tips: _} | GestureKind::Ray =>
-                    {
-                        let obj = obj_list.get_mut_object(gesture.id).unwrap();
+            let obj = obj_list.get_mut_object(gesture.id).unwrap();
 
-                        if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
+            match &mut obj.kind
+            {
+                ObjectKind::DebugCube | ObjectKind::TintedCube { tint: _ } | ObjectKind::TexturedQuad { texture: _ } =>
+                {
+                    if gesture.phase != GesturePhase::Cancelled
+                    {
+                        match gesture.kind
                         {
-                            obj.transform.pos += diff.pos;
-                            obj.transform.rot = diff.rot * obj.transform.rot;
-                            // obj.transform.size *= diff.size;
+                            GestureKind::Grab { tips: _} | GestureKind::Ray =>
+                            {
+                                if let Some(diff) = gestures.transform_since_last_frame(&obj.transform.pos)
+                                {
+                                    obj.transform.pos += diff.pos;
+                                    obj.transform.rot = diff.rot * obj.transform.rot;
+                                    // obj.transform.size *= diff.size;
+                                }
+                            },
+                            _ => {}
                         }
-                    },
-                    _ => {}
-                }
-            }
+                    }
 
-            match gesture.kind
-            {
-                GestureKind::Tap { tips } | GestureKind::Grab { tips } =>
-                {
-                    for tip in tips
+                    match gesture.kind
                     {
-                        colliding_tips[tip.to_idx()] = true;
+                        GestureKind::Tap { tips } | GestureKind::Grab { tips } =>
+                        {
+                            for tip in tips
+                            {
+                                colliding_tips[tip.to_idx()] = true;
+                            }
+                        },
+                        _ => {}
+                    }
+                },
+                ObjectKind::Window { window } =>
+                {
+                    let Some(hand) = hand else { break };
+
+                    if let Some(event) = window.handle_gesture(&mut obj.transform, &hand, &gesture, &gestures)
+                    {
+                        match event
+                        {
+                            WindowEvent::ContentInteract { tips } =>
+                            {
+                                for tip in tips
+                                {
+                                    colliding_tips[tip.to_idx()] = true;
+                                }
+                            },
+                            WindowEvent::Close =>
+                            {
+                                obj.kind = ObjectKind::Empty;
+                            },
+                            WindowEvent::Drag => {}
+                        }
                     }
                 },
                 _ => {}
@@ -253,39 +292,33 @@ fn main()
         // Update textured quad
         // Really not optimal (as buffer should be reused) but good enough for testing
         // Should ONLY be called on update (as it is an expensive operation)
-        // {
-        //     let width : u32 = 4;
-        //     let height : u32 = 2;
-        //     let data : [u8; 4 * 2 * 3] = [
-        //         // TOP
-        //         255,   0,   0,
-        //           0, 255,   0,
-        //           0,   0, 255,
-        //           0,   0,  0,
+        {
+            // let width : u32 = 4;
+            // let height : u32 = 2;
+            // let data : [u8; 4 * 2 * 3] = [
+            //     // TOP
+            //     255,   0,   0,
+            //       0, 255,   0,
+            //       0,   0, 255,
+            //       0,   0,  0,
 
-        //         255, 255,  0,
-        //         255,   0, 255,
-        //         0,   255, 255,
-        //         255, 255, 255,
-        //     ];
+            //     255, 255,  0,
+            //     255,   0, 255,
+            //     0,   255, 255,
+            //     255, 255, 255,
+            // ];
 
-        //     let obj = obj_list.get_mut_object(quad_id).expect("Could not get quad obj");
-        //     let ObjectKind::TexturedQuad { texture } = &mut obj.kind else { panic!("Quad object is not a textured quad") };
+            // let obj = obj_list.get_mut_object(window_id).expect("Could not get window obj");
+            // let ObjectKind::Window { window } = &mut obj.kind else { panic!("Window object is not a window quad") };
 
+            // // new_rgb => texture will be sampled and interpolated linearly when magnified or minified
+            // // new_pixelated_rgb => texture will be sampled to be rendered like Minecraft
+            // let texture = VulkanTexture::new_pixelated_rgb(width, height, &data, &vk_state);
 
-        //     // new_rgb => texture will be sampled and interpolated linearly when magnified or minified
-        //     // new_pixelated_rgb => texture will be sampled to be rendered like Minecraft
-        //     *texture = VulkanTexture::new_pixelated_rgb(width, height, &data, &vk_state);
+            // // Update quad aspect ratio
 
-        //     // Update quad aspect ratio
-
-        //     let aspect_ratio = (width as f32) / (height as f32) ;
-
-        //     let x_scale : f32 = 1.0;
-        //     let y_scale : f32 = x_scale / aspect_ratio;
-
-        //     obj.transform.size = vec3(x_scale, y_scale, 1.0);
-        // }
+            // window.refresh_content(texture, &mut obj.obb);
+        }
 
         // ---- Rendering -----
 
@@ -326,23 +359,30 @@ fn main()
             .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
             .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
+        let mut render_state = RenderState
+        {
+            swapchain: &swapchain,
+            builder: &mut builder
+        };
+
         unsafe
         {
 'top:       for (_, obj) in obj_list.iter()
             {
                 match &obj.kind
                 {
+                    ObjectKind::Empty => {},
                     ObjectKind::DebugCube =>
                     {
-                        vk_state.render_debug_cube(obj, swapchain, &mut builder);
+                        vk_state.render_debug_cube(&obj.transform, &mut render_state);
                     },
                     ObjectKind::TintedCube { tint } =>
                     {
-                        vk_state.render_tinted_cube(obj, tint, swapchain, &mut builder);
+                        vk_state.render_tinted_cube(&obj.transform, tint, &mut render_state);
                     },
                     ObjectKind::TexturedQuad { texture } =>
                     {
-                        vk_state.render_textured_quad(obj, texture, swapchain, &mut builder);
+                        vk_state.render_textured_quad(&obj.transform, texture, &mut render_state);
                     },
                     ObjectKind::Hand { hand, buffer } =>
                     {
@@ -351,7 +391,7 @@ fn main()
                         let tint = glam::vec4(0.0, 0.0, 1.0, 1.0);
 
                         vk_state.buffers.update_hand_wireframe_buffer(buffer, hand);
-                        vk_state.render_wireframe(buffer.as_ref(), &tint, swapchain, &mut builder);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
                     },
                     ObjectKind::Raycast { ray, buffer } =>
                     {
@@ -360,8 +400,20 @@ fn main()
                         let tint = get_raycast_tint(ray, &cube_ids, &obj_list);
 
                         vk_state.buffers.update_raycast_buffer(buffer, ray);
-                        vk_state.render_wireframe(buffer.as_ref(), &tint, swapchain, &mut builder);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
                     },
+                    ObjectKind::Window { window } =>
+                    {
+                        window.draw(&obj.transform, &vk_state, &mut render_state);
+
+                        let obb_transform = Transform::new(
+                            obj.transform.pos,
+                            obj.transform.rot,
+                            obj.transform.size * obj.obb.and_then(|obb| Some(obb.size)).unwrap_or(Vec3::ZERO)
+                        );
+
+                        vk_state.render_tinted_cube_wireframe(&obb_transform, &vec4(0.0, 0.0, 1.0, 0.66), &mut render_state);
+                    }
                 }
             }
         }

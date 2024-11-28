@@ -7,6 +7,8 @@ use super::VulkanState;
 #[derive(Debug, Clone)]
 pub struct VulkanTexture
 {
+    pub width: u32,
+    pub height: u32,
     pub view: Arc<ImageView>,
     pub desc: Arc<DescriptorSet>
 }
@@ -77,6 +79,8 @@ impl VulkanTexture
 
         Self
         {
+            width,
+            height,
             view,
             desc
         }
@@ -112,6 +116,8 @@ impl VulkanTexture
 
         Self
         {
+            width,
+            height,
             view,
             desc
         }

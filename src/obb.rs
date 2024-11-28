@@ -47,27 +47,35 @@ impl OBB
 
     pub fn compute_obb(&self, transform: &Transform) -> ComputedOOB
     {
+        return self.compute_obb_with_offset(transform, Vec3::ZERO);
+    }
+
+    pub fn compute_obb_with_offset(&self, transform: &Transform, offset: Vec3) -> ComputedOOB
+    {
         let x_normal = transform.rot.mul_vec3(Vec3::X);
         let y_normal = transform.rot.mul_vec3(Vec3::Y);
         let z_normal = transform.rot.mul_vec3(Vec3::Z);
 
+        println!("{:?} {:?}", offset, transform.size);
+
+        let pos = transform.pos + transform.rot * offset * transform.size;
         let half = self.size * transform.size / 2.0;
 
         let vertices : [Vec3; 8] =
         [
-            transform.pos + x_normal * half.x + y_normal * half.y + z_normal * half.z,
-            transform.pos - x_normal * half.x + y_normal * half.y + z_normal * half.z,
-            transform.pos + x_normal * half.x - y_normal * half.y + z_normal * half.z,
-            transform.pos + x_normal * half.x + y_normal * half.y - z_normal * half.z,
-            transform.pos - x_normal * half.x - y_normal * half.y + z_normal * half.z,
-            transform.pos - x_normal * half.x + y_normal * half.y - z_normal * half.z,
-            transform.pos + x_normal * half.x - y_normal * half.y - z_normal * half.z,
-            transform.pos - x_normal * half.x - y_normal * half.y - z_normal * half.z,
+            pos + x_normal * half.x + y_normal * half.y + z_normal * half.z,
+            pos - x_normal * half.x + y_normal * half.y + z_normal * half.z,
+            pos + x_normal * half.x - y_normal * half.y + z_normal * half.z,
+            pos + x_normal * half.x + y_normal * half.y - z_normal * half.z,
+            pos - x_normal * half.x - y_normal * half.y + z_normal * half.z,
+            pos - x_normal * half.x + y_normal * half.y - z_normal * half.z,
+            pos + x_normal * half.x - y_normal * half.y - z_normal * half.z,
+            pos - x_normal * half.x - y_normal * half.y - z_normal * half.z,
         ];
 
         ComputedOOB
         {
-            center: transform.pos,
+            center: pos,
             rot: transform.rot,
             half_size: half,
             vertices
@@ -77,6 +85,16 @@ impl OBB
 
 impl ComputedOOB
 {
+    pub fn to_transform(&self) -> Transform
+    {
+        Transform
+        {
+            pos: self.center,
+            rot: self.rot,
+            size: self.half_size * 2.0
+        }
+    }
+
     pub fn does_intersects_ray(&self, ray: &Ray) -> Option<f32>
     {
         let local_origin = self.rot.inverse() * (self.center - ray.origin);

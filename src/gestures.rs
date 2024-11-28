@@ -4,7 +4,7 @@ use glam::Vec3;
 
 use openxr::{self as xr};
 
-use crate::{obb::OBB, object::{ObjectID, ObjectList}, openxr::XRState, ray::Ray, Transform};
+use crate::{obb::{ComputedOOB, OBB}, object::{ObjectID, ObjectList}, openxr::XRState, ray::Ray, Transform};
 
 #[derive(Debug, Clone)]
 pub enum GestureKind
@@ -33,7 +33,7 @@ pub enum GesturePhase
     Entered,
     Moved,
     Exited,
-    Ended,
+    Ended { on_origin: bool },
     Cancelled
 }
 
@@ -45,11 +45,18 @@ pub struct Gesture
     pub phase: GesturePhase,
 }
 
+struct Interaction
+{
+    id: ObjectID,
+    kind: GestureKind,
+    has_leaved_origin: bool
+}
+
 pub struct GestureState
 {
     previous_wrist: Option<Transform>,
     current_wrist: Option<Transform>,
-    current_interaction: Option<(ObjectID, GestureKind)>
+    current_interaction: Option<Interaction>
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,17 +208,17 @@ impl GestureState
 
         if let Some(hand) = hand
         {
-            if let Some((id, ref kind)) = self.current_interaction
+            if let Some(interaction) = &mut self.current_interaction
             {
-                if let Some(new_kind) = GestureState::compute_interaction_with(id, hand, list)
+                if let Some(new_kind) = GestureState::compute_interaction_with(interaction.id, hand, list)
                 {
-                    if *kind == new_kind
+                    if interaction.kind == new_kind
                     {
                         // Continue current interaction
 
                         return vec![Gesture
                         {
-                            id,
+                            id: interaction.id,
                             kind: new_kind,
                             phase: GesturePhase::Moved
                         }];
@@ -222,13 +229,13 @@ impl GestureState
 
                         return vec![Gesture
                         {
-                            id,
-                            kind: kind.clone(),
-                            phase: GesturePhase::Ended
+                            id: interaction.id,
+                            kind: interaction.kind.clone(),
+                            phase: GesturePhase::Ended { on_origin: !interaction.has_leaved_origin }
                         },
                         Gesture
                         {
-                            id,
+                            id: interaction.id,
                             kind: new_kind,
                             phase: GesturePhase::Begin
                         }];
@@ -239,16 +246,19 @@ impl GestureState
             if let Some(new) = GestureState::check_for_new_interaction(hand, list)
             {
                 let (id, ref kind) = new;
+                let mut has_leaved_origin = false;
 
                 if let Some(current_interaction) = self.current_interaction.take()
                 {
-                    if current_interaction.1 == *kind
+                    has_leaved_origin = current_interaction.has_leaved_origin;
+
+                    if current_interaction.kind == *kind
                     {
                         // Same interaction, different object
 
                         res.push(Gesture
                         {
-                            id: current_interaction.0,
+                            id: current_interaction.id,
                             kind: kind.clone(),
                             phase: GesturePhase::Exited
                         });
@@ -259,6 +269,8 @@ impl GestureState
                             kind: kind.clone(),
                             phase: GesturePhase::Entered
                         });
+
+                        has_leaved_origin = true;
                     }
                     else
                     {
@@ -266,9 +278,9 @@ impl GestureState
 
                         res.push(Gesture
                         {
-                            id: current_interaction.0,
+                            id: current_interaction.id,
                             kind: kind.clone(),
-                            phase: GesturePhase::Ended
+                            phase: GesturePhase::Ended { on_origin: !has_leaved_origin }
                         });
 
                         res.push(Gesture
@@ -291,7 +303,7 @@ impl GestureState
                     });
                 }
 
-                self.current_interaction = Some(new);
+                self.current_interaction = Some(Interaction { id: new.0, kind: new.1, has_leaved_origin });
             }
             else if let Some(end_gesture) = self.end_current_interaction(false)
             {
@@ -319,9 +331,9 @@ impl GestureState
 
         return Some(Gesture
         {
-            id: current.0,
-            kind: current.1,
-            phase: if !cancelled { GesturePhase::Ended } else { GesturePhase::Cancelled }
+            id: current.id,
+            kind: current.kind,
+            phase: if !cancelled { GesturePhase::Ended { on_origin: !current.has_leaved_origin } } else { GesturePhase::Cancelled }
         });
     }
 
@@ -420,8 +432,13 @@ impl GestureState
         let obj = list.get_object(id)?;
         let obj_obb = obj.compute_obb()?;
 
+        return GestureState::compute_interaction_with_obb(obj_obb, hand);
+    }
+
+    pub fn compute_interaction_with_obb(obb: ComputedOOB, hand: &Hand) -> Option<GestureKind>
+    {
         let tip_obbs = hand.tips().map(|transform| OBB::CUBE_OBB.compute_obb(&transform));
-        let collisions = tip_obbs.map(|tip| tip.does_intersects_obb(&obj_obb));
+        let collisions = tip_obbs.map(|tip| tip.does_intersects_obb(&obb));
 
         let tips = collisions.into_iter()
             .enumerate()
@@ -452,7 +469,7 @@ impl GestureState
 
         if thumb_tip.distance_squared(index_tip) < 0.0003
         {
-            if obj_obb.does_intersects_ray(&ray).is_some()
+            if obb.does_intersects_ray(&ray).is_some()
             {
                 return Some(GestureKind::Ray);
             }

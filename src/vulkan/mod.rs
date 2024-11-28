@@ -1,4 +1,4 @@
-use std::{ffi::CStr, mem::transmute, sync::Arc};
+use std::{borrow::Borrow, ffi::{c_void, CStr}, mem::transmute, ptr, sync::Arc};
 
 use buffer::{BufferContents, Subbuffer};
 use buffers::{LineVertex, TintedObjectData, VulkanBuffers};
@@ -12,7 +12,7 @@ use pipelines::VulkanPipelines;
 use swapchain::VulkanSwapchain;
 use texture::VulkanTexture;
 use vulkano::{*, format::Format, instance::*, device::*, device::physical::*, render_pass::*};
-use ash::vk::{self, Handle};
+use ash::vk::{self, Handle, PhysicalDeviceFeatures};
 
 use crate::{object::{Object, ObjectKind}, openxr::{XRSetupState, XRState}, Transform};
 
@@ -95,8 +95,12 @@ impl VulkanState
                     .queue_priorities(&[1.0]),
             ];
 
+            let features = PhysicalDeviceFeatures::default()
+                .fill_mode_non_solid(true);
+
             let device_create_info = vk::DeviceCreateInfo::default()
                 .push_next(&mut multview_feature)
+                .enabled_features(&features)
                 .queue_create_infos(&queue_create_infos);
 
             let device_create_info_ptr : *const vk::DeviceCreateInfo = &device_create_info;
@@ -114,6 +118,7 @@ impl VulkanState
 
             let mut features = DeviceFeatures::default();
             features.multiview = true;
+            features.fill_mode_non_solid = true;
 
             let (vulkano_device, mut queues) = Device::from_handle(vulkano_pdevice.clone(), device.handle(), DeviceCreateInfo
             {
@@ -245,91 +250,118 @@ impl VulkanAllocators
     }
 }
 
-impl VulkanState
+pub struct RenderState<'a>
 {
-    pub unsafe fn render_debug_cube(&self, obj: &Object, swapchain: &VulkanSwapchain, builder: &mut RecordingCommandBuffer)
+    pub swapchain: &'a VulkanSwapchain,
+    pub builder: &'a mut RecordingCommandBuffer
+}
+
+impl<'a> VulkanState
+{
+    pub unsafe fn render_debug_cube(&self, transform: &Transform, render: &'a mut RenderState)
     {
         let pipeline = &self.pipelines.tinted;
         let layout = pipeline.layout();
         let vertex = &self.buffers.debug_cube_vertex;
         let index = &self.buffers.cube_index;
 
-        builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+        render.builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
 
-        builder.push_constants(layout.clone(), 0, TintedObjectData
+        render.builder.push_constants(layout.clone(), 0, TintedObjectData
         {
-            transform: obj.transform.to_mat4(),
+            transform: transform.to_mat4(),
             tint: glam::Vec4::ONE,
         }).unwrap();
 
-        builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
-               .bind_index_buffer(index.clone()).unwrap()
-               .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, swapchain.get_global_uniform_descriptor().clone()).unwrap()
-               .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
+        render.builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
+                    .bind_index_buffer(index.clone()).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, render.swapchain.get_global_uniform_descriptor().clone()).unwrap()
+                    .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
     }
 
-    pub unsafe fn render_tinted_cube(&self, obj: &Object, tint: &glam::Vec4, swapchain: &VulkanSwapchain, builder: &mut RecordingCommandBuffer)
+    pub unsafe fn render_tinted_cube(&self, transform: &Transform, tint: &glam::Vec4, render: &'a mut RenderState)
     {
         let pipeline = &self.pipelines.tinted;
         let layout = pipeline.layout();
         let vertex = &self.buffers.cube_vertex;
         let index = &self.buffers.cube_index;
 
-        builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+        render.builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
 
-        builder.push_constants(layout.clone(), 0, TintedObjectData
+        render.builder.push_constants(layout.clone(), 0, TintedObjectData
         {
-            transform: obj.transform.to_mat4(),
+            transform: transform.to_mat4(),
             tint: *tint,
         }).unwrap();
 
-        builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
-               .bind_index_buffer(index.clone()).unwrap()
-               .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, swapchain.get_global_uniform_descriptor().clone()).unwrap()
-               .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
+        render.builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
+                    .bind_index_buffer(index.clone()).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, render.swapchain.get_global_uniform_descriptor().clone()).unwrap()
+                    .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
     }
 
-    pub unsafe fn render_textured_quad(&self, obj: &Object, texture: &VulkanTexture, swapchain: &VulkanSwapchain, builder: &mut RecordingCommandBuffer)
+    pub unsafe fn render_tinted_cube_wireframe(&self, transform: &Transform, tint: &glam::Vec4, render: &'a mut RenderState)
+    {
+        let pipeline = &self.pipelines.tinted_debug;
+        let layout = pipeline.layout();
+        let vertex = &self.buffers.cube_vertex;
+        let index = &self.buffers.cube_index;
+
+        render.builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+
+        render.builder.push_constants(layout.clone(), 0, TintedObjectData
+        {
+            transform: transform.to_mat4(),
+            tint: *tint,
+        }).unwrap();
+
+        render.builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
+                    .bind_index_buffer(index.clone()).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, render.swapchain.get_global_uniform_descriptor().clone()).unwrap()
+                    .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
+    }
+
+    pub unsafe fn render_textured_quad(&self, transform: &Transform, texture: &VulkanTexture, render: &'a mut RenderState)
     {
         let pipeline = &self.pipelines.textured;
         let layout = pipeline.layout();
         let vertex = &self.buffers.quad_vertex;
         let index = &self.buffers.quad_index;
 
-        builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+        render.builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
 
-        builder.push_constants(layout.clone(), 0, TintedObjectData
+        render.builder.push_constants(layout.clone(), 0, TintedObjectData
         {
-            transform: obj.transform.to_mat4(),
+            transform: transform.to_mat4(),
             tint: vec4(1.0, 1.0, 1.0, 1.0),
         }).unwrap();
 
-        builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
-               .bind_index_buffer(index.clone()).unwrap()
-               .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
-                vec![
-                    swapchain.get_global_uniform_descriptor().clone(),
-                    texture.desc.clone(),
-                ]).unwrap()
-               .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
+        render.builder.bind_vertex_buffers(0, [vertex.clone()]).unwrap()
+                    .bind_index_buffer(index.clone()).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
+                        vec![
+                            render.swapchain.get_global_uniform_descriptor().clone(),
+                            texture.desc.clone(),
+                        ]).unwrap()
+                    .draw_indexed(index.len() as u32, 1, 0, 0, 0).unwrap();
     }
 
-    pub unsafe fn render_wireframe(&self, buffer: &Subbuffer<[LineVertex]>, tint: &glam::Vec4, swapchain: &VulkanSwapchain, builder: &mut RecordingCommandBuffer)
+    pub unsafe fn render_wireframe(&self, buffer: &Subbuffer<[LineVertex]>, tint: &glam::Vec4, render: &'a mut RenderState)
     {
         let pipeline = &self.pipelines.line;
         let layout = pipeline.layout();
 
-        builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
+        render.builder.bind_pipeline_graphics(pipeline.clone()).unwrap();
 
-        builder.push_constants(layout.clone(), 0, TintedObjectData
+        render.builder.push_constants(layout.clone(), 0, TintedObjectData
         {
             transform: glam::Mat4::IDENTITY,
             tint: *tint,
         }).unwrap();
 
-        builder.bind_vertex_buffers(0, [buffer.clone()]).unwrap()
-            .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, swapchain.get_global_uniform_descriptor().clone()).unwrap()
-            .draw(buffer.len() as u32, 1, 0, 0).unwrap();
+        render.builder.bind_vertex_buffers(0, [buffer.clone()]).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0, render.swapchain.get_global_uniform_descriptor().clone()).unwrap()
+                    .draw(buffer.len() as u32, 1, 0, 0).unwrap();
     }
 }
 

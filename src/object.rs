@@ -3,7 +3,7 @@ use std::sync::Arc;
 use glam::Vec4;
 use vulkano::image::view::ImageView;
 
-use crate::{gestures::Hand, obb::{ComputedOOB, OBB}, ray::Ray, vulkan::{buffers::{HandBuffer, RaycastBuffer}, texture::VulkanTexture}, Transform};
+use crate::{gestures::Hand, obb::{ComputedOOB, OBB}, ray::Ray, vulkan::{buffers::{HandBuffer, RaycastBuffer}, texture::VulkanTexture}, window::Window, Transform};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd)]
 pub struct ObjectID(usize);
@@ -11,11 +11,13 @@ pub struct ObjectID(usize);
 #[derive(Debug, Clone)]
 pub enum ObjectKind
 {
+    Empty,
     DebugCube,
     TintedCube { tint: Vec4 },
     TexturedQuad { texture: VulkanTexture },
     Hand { hand: Hand, buffer: HandBuffer },
     Raycast { ray: Ray, buffer: RaycastBuffer },
+    Window { window: Window }
 }
 
 pub struct Object
