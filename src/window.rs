@@ -8,7 +8,7 @@ pub struct Window
 {
     obj_id: ObjectID,
     title: String,
-    texture: VulkanTexture,
+    pub texture: VulkanTexture,
     is_hovering_close: bool
 }
 
@@ -187,5 +187,10 @@ impl<'a> Window
         //     .to_transform();
 
         // vk_state.render_tinted_cube_wireframe(&content_obb, &vec4(1.0, 0.0, 0.0, 0.66), render_state);
+    }
+
+    pub fn size(&self) -> (u32, u32)
+    {
+        return (self.texture.width, self.texture.height);
     }
 }

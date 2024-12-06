@@ -267,8 +267,6 @@ impl VulkanBuffers
             HAND_LINES.map(|_| LineVertex { position: glam::Vec3::ZERO.to_array() }).into_iter())
         .unwrap();
 
-        println!("REINTERPET 1");
-
         HandBuffer(buffer.reinterpret())
     }
 
@@ -301,7 +299,6 @@ impl VulkanBuffers
             vec![LineVertex { position: glam::Vec3::ZERO.to_array() }; 2].into_iter())
         .unwrap();
 
-        println!("REINTERPET 2");
         RaycastBuffer(buffer.reinterpret())
     }
 

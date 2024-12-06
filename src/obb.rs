@@ -56,7 +56,7 @@ impl OBB
         let y_normal = transform.rot.mul_vec3(Vec3::Y);
         let z_normal = transform.rot.mul_vec3(Vec3::Z);
 
-        println!("{:?} {:?}", offset, transform.size);
+        // println!("{:?} {:?}", offset, transform.size);
 
         let pos = transform.pos + transform.rot * offset * transform.size;
         let half = self.size * transform.size / 2.0;

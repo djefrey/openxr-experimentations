@@ -1,0 +1,30 @@
+[package]
+name = "communication"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "communication_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "client_tcp"
+path = "src/client_tcp.rs"
+
+[[bin]]
+name = "server_tcp"
+path = "src/serveur_tcp.rs"
+
+[[bin]]
+name = "server_udp"
+path = "src/serveur_udp.rs"
+
+[[bin]]
+name = "client_udp"
+path = "src/client_udp.rs"
+
+[dependencies]
+bytemuck = "1.19.0"
+md5 = "0.7.0"
+rand = "0.8.5"
+hex = "0.4.3"
