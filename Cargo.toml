@@ -72,3 +72,11 @@ name = "android.permission.INTERNET"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_NETWORK_STATE"
+
+[package.metadata.android.signing.dev]
+path = "key.jks"
+keystore_password = "P4ssw0rd"
+
+[package.metadata.android.signing.release]
+path = "key.jks"
+keystore_password = "P4ssw0rd"
