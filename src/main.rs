@@ -169,7 +169,7 @@ fn main()
                 let data = udp.receive();
                 println!("Got data !");
 
-                conn.send_pod(&0u32).expect("Could not send OK signal");
+                // conn.send_pod(&0u32).expect("Could not send OK signal");
 
                 let Ok((jpg, origin)) = data else { continue; };
 
