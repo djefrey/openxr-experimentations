@@ -556,6 +556,27 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct FrameData
+{
+    pub frame_id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct FrameResponse
+{
+    pub padding: [u32; 3],
+    pub frame_id: u32,
+    pub metadata_rcv_time: u128,
+    pub data_rcv_time: u128,
+    pub decode_time: u128,
+    pub display_time: u128,
+}
+
 fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_mtx: Arc<Mutex<VulkanState>>, obj_list_mtx: Arc<Mutex<ObjectList>>)
 {
     let mut times : Vec<f64> = vec![];
@@ -571,8 +592,12 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
 
     loop
     {
-        let size : WindowSize = conn.receive_pod().expect("Could not get dat");
-        // println!("Got size ! {} {}", size.width, size.height);
+        // let size : FrameData = conn.receive_pod().expect("Could not get dat");
+        // // println!("Got size ! {} {}", size.width, size.height);
+
+        // let metadata_rcv_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+
+        let metadata_rcv_time : u128 = 0;
 
         let data = udp.receive();
         // println!("Got data {} !", data.is_ok());
@@ -581,10 +606,14 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
 
         let Ok((bytes, origin)) = data else { continue; };
 
+        let data_rcv_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+
         let struct_size = std::mem::size_of::<FrameData>();
 
         let size = bytemuck::from_bytes::<FrameData>(&bytes[..struct_size]);
         let Ok(data) = turbojpeg::decompress(&bytes[struct_size..], turbojpeg::PixelFormat::RGB) else { println!("Could not decode JPEG"); continue; };
+
+        let decode_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
 
         if let Some(fence) = current_fence
         {
@@ -649,6 +678,16 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
 
             // last_frame = Some(end);
             frame_count += 1;
+
+            conn.send_pod(&FrameResponse
+            {
+                padding: [0; 3],
+                frame_id: size.frame_id,
+                metadata_rcv_time,
+                data_rcv_time,
+                decode_time,
+                display_time,
+            });
         }
     }
 }
