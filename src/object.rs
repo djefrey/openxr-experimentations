@@ -16,7 +16,7 @@ pub enum ObjectKind
     TintedCube { tint: Vec4 },
     TexturedQuad { texture: VulkanTexture },
     Hand { hand: Hand, buffer: HandBuffer },
-    Raycast { ray: Ray, buffer: RaycastBuffer },
+    Raycast { ray: Ray, tint: Vec4, buffer: RaycastBuffer },
     Window { window: Window }
 }
 

@@ -28,7 +28,7 @@ struct MessageBuffer {
 // Structure représentant une communication UDP
 pub struct UdpCommunication {
     socket: UdpSocket,
-    messages: Mutex<HashMap<u32, MessageBuffer>>,
+    messages: HashMap<u32, MessageBuffer>,
 }
 
 impl UdpCommunication {
@@ -38,7 +38,7 @@ impl UdpCommunication {
         socket.set_read_timeout(Some(Duration::from_secs(5)))?;
         Ok(UdpCommunication {
             socket,
-            messages: Mutex::new(HashMap::new()),
+            messages: HashMap::new(),
         })
     }
 
@@ -54,8 +54,6 @@ impl UdpCommunication {
         let mut block_id: u32 = 0;
         let mut offset = 0;
 
-        println!("Envoi d'un message : ID = {}, Taille totale = {}", message_id, total_size);
-
         while offset < data.len() {
             let chunk_size = usize::min(max_chunk_size, data.len() - offset);
             let end = offset + chunk_size;
@@ -70,20 +68,14 @@ impl UdpCommunication {
             // Envoyer le paquet UDP
             self.socket.send_to(&buffer, target)?;
 
-            println!(
-                "Envoyé bloc ID = {}, Taille = {}, Offset = {}, Adresse cible = {}",
-                block_id, chunk_size, offset, target
-            );
-
             offset = end;
             block_id += 1;
         }
 
-        println!("Message ID = {} envoyé avec succès", message_id);
         Ok(())
     }
 
-    pub fn receive(&self) -> io::Result<(Vec<u8>, SocketAddr)> {
+    pub fn receive(&mut self) -> io::Result<(Vec<u8>, SocketAddr)> {
         let mut buffer = [0u8; MAX_UDP_PACKET_SIZE];
 
         loop {
@@ -97,19 +89,13 @@ impl UdpCommunication {
                         let total_size = u32::from_be_bytes(header[4..8].try_into().unwrap());
                         let block_id = u32::from_be_bytes(header[8..12].try_into().unwrap());
 
-                        let mut messages = self.messages.lock().unwrap();
-
                         let is_complete;
                         let full_data;
                         let source_addr;
 
                         // Accéder au buffer de message ou en créer un nouveau
                         {
-                            let message_buffer = messages.entry(message_id).or_insert_with(|| {
-                                println!(
-                                    "Nouveau message : ID = {}, Taille totale attendue = {}, Source = {}",
-                                    message_id, total_size, addr
-                                );
+                            let message_buffer = self.messages.entry(message_id).or_insert_with(|| {
                                 let buffer = vec![0u8; total_size as usize];
                                 MessageBuffer {
                                     total_size,
@@ -121,12 +107,10 @@ impl UdpCommunication {
                             });
 
                             if addr != message_buffer.source_addr {
-                                println!("Paquet ignoré : source inattendue {}", addr);
                                 continue;
                             }
 
                             if message_buffer.blocks_received.contains(&block_id) {
-                                println!("Bloc ID = {} déjà reçu, ignoré", block_id);
                                 continue;
                             }
 
@@ -142,11 +126,6 @@ impl UdpCommunication {
                             message_buffer.bytes_received += data.len();
                             message_buffer.blocks_received.insert(block_id);
 
-                            println!(
-                                "Bloc ID = {} ajouté au message ID = {}, Offset = {}, Bytes reçus = {}",
-                                block_id, message_id, offset, message_buffer.bytes_received
-                            );
-
                             let total_blocks = ((message_buffer.total_size as usize + max_chunk_size - 1) / max_chunk_size) as u32;
 
                             // Vérifier si tous les blocs sont reçus
@@ -161,11 +140,7 @@ impl UdpCommunication {
 
                         // Supprimer le message si complet
                         if is_complete {
-                            messages.remove(&message_id);
-                            println!(
-                                "Message ID = {} reçu complètement ({} octets)",
-                                message_id, total_size
-                            );
+                            self.messages.remove(&message_id);
                             return Ok((full_data, source_addr));
                         }
                     }

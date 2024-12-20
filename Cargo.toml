@@ -14,6 +14,10 @@ vulkano-shaders  = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd460
 communication = { path = "./communication"}
 turbojpeg = "1.1.1"
 
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
 [[example]]
 name = "android"
 crate-type = ["cdylib"]
@@ -80,3 +84,10 @@ keystore_password = "P4ssw0rd"
 [package.metadata.android.signing.release]
 path = "key.jks"
 keystore_password = "P4ssw0rd"
+
+[package.metadata.android.signing.release-with-debug]
+path = "key.jks"
+keystore_password = "P4ssw0rd"
+
+[package.metadata.android.application]
+debuggable = true
