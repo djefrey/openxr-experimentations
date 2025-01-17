@@ -171,7 +171,7 @@ fn main()
     {
         println!("Attempt connection !");
 
-        if let Ok(mut conn) = TcpConnection::connect("192.168.205.242:4242")
+        if let Ok(mut conn) = TcpConnection::connect("192.168.151.242:4242")
         {
             run_downloader_thread(conn, window_id, vk_state_mtx_conn, obj_list_mtx_conn);
         }
@@ -587,6 +587,24 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
 
     println!("Connected !");
 
+    let ref_timestamp : u128;
+    let ref_time : Instant;
+
+    {
+        let ping: u8 = conn.receive_pod().unwrap();
+        // Pong
+        conn.send_pod(&ping);
+
+        // Get estimated timestamp
+        ref_timestamp = conn.receive_pod().unwrap();
+        ref_time = Instant::now();
+    }
+
+    let get_us_sinc_ref = || -> u128
+    {
+        Instant::now().duration_since(ref_time).as_micros() + ref_timestamp
+    };
+
     let mut cache : Option<(Subbuffer<[u8]>, Arc<CommandBuffer>)> = None;
     let mut current_fence : Option<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> = None;
 
@@ -595,7 +613,7 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
         // let size : FrameData = conn.receive_pod().expect("Could not get dat");
         // // println!("Got size ! {} {}", size.width, size.height);
 
-        // let metadata_rcv_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+        // let metadata_rcv_time = get_us_sinc_ref();
 
         let metadata_rcv_time : u128 = 0;
 
@@ -606,14 +624,14 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
 
         let Ok((bytes, origin)) = data else { continue; };
 
-        let data_rcv_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+        let data_rcv_time = get_us_sinc_ref();
 
         let struct_size = std::mem::size_of::<FrameData>();
 
         let size = bytemuck::from_bytes::<FrameData>(&bytes[..struct_size]);
         let Ok(data) = turbojpeg::decompress(&bytes[struct_size..], turbojpeg::PixelFormat::RGB) else { println!("Could not decode JPEG"); continue; };
 
-        let decode_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+        let decode_time = get_us_sinc_ref();
 
         if let Some(fence) = current_fence
         {
@@ -675,6 +693,8 @@ fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_
                 // Update quad aspect ratio
                 window.refresh_content(texture, &mut obj.obb);
             }
+
+            let display_time = get_us_sinc_ref();
 
             // last_frame = Some(end);
             frame_count += 1;
