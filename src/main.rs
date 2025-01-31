@@ -166,7 +166,7 @@ fn main()
         None
     );
 
-    let show_debug = true;
+    let show_debug = false;
 
     let mut last_frame : Instant = Instant::now();
 
@@ -271,7 +271,33 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
     {
         let mut obj_list = obj_list_mtx.lock().expect("Could not get ObjList lock");
 
-        for gesture in app_state.gestures.update(&app_state.hand, &obj_list)
+        let gestures = app_state.gestures.update(&app_state.hand, &obj_list);
+
+        if gestures.is_empty()
+        {
+            if let Some(hand) = &app_state.hand
+            {
+                let ray = hand.compute_ray();
+                let mut closest : Option<f32> = None;
+
+                for (_, obj) in obj_list.iter()
+                {
+                    if let Some(dist) = obj.compute_obb().and_then(|obb| obb.does_intersects_ray(&ray))
+                    {
+                        closest = Some(dist.min(closest.unwrap_or(f32::MAX)));
+                    }
+                }
+
+                if let Some(dist) = closest
+                {
+                    let pos = ray.to_points(dist)[1];
+
+                    cursors.push(pos);
+                }
+            }
+        }
+
+        for gesture in gestures
         {
             // println!("Gesture: {:?}", gesture);
 
@@ -287,8 +313,9 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                         {
                             cursors.append(&mut tips.iter().map(|tip|
                             {
-                                // TODO: project tip on OBB
-                                hand.get_tip(tip.to_idx()).unwrap().pos
+                                let tip_pos = hand.get_tip(tip.to_idx()).unwrap().pos;
+
+                                obb.project_point(tip_pos)
                             }).collect::<Vec<_>>());
                         },
                         GestureKind::Ray { dist } =>
