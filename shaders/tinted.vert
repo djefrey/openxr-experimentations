@@ -5,6 +5,7 @@
 layout(set = 0, binding = 0) uniform GlobalData
 {
     mat4 proj[2];
+    mat4 invProj[2];
 } global;
 
 layout(push_constant) uniform ObjectData

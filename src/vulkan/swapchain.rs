@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use glam::Mat4;
 use openxr as xr;
-use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, descriptor_set::{DescriptorSet, WriteDescriptorSet}, format::Format, image::{sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::Pipeline, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, Handle};
+use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, descriptor_set::{layout::{DescriptorBindingFlags, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, DescriptorSetLayoutCreateInfo, DescriptorType}, DescriptorSet, WriteDescriptorSet}, format::Format, image::{sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::Pipeline, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, shader::{DescriptorBindingRequirements, ShaderStages}, Handle, NonExhaustive};
 use vulkano_macros::BufferContents;
 
 use crate::openxr::XRState;
@@ -16,7 +16,9 @@ use super::VulkanState;
 pub struct GlobalUniformData
 {
     pub left: Mat4,
-    pub right: Mat4
+    pub right: Mat4,
+    pub inv_left: Mat4,
+    pub inv_right: Mat4
 }
 
 struct SwapchainFrame
@@ -37,6 +39,7 @@ pub struct VulkanSwapchain
     pub handle: xr::Swapchain<xr::Vulkan>,
     frames: Vec<SwapchainFrame>,
     global_uniforms: Vec<SwapchainGlobalUniformData>,
+    depth_desc_set: Vec<Arc<DescriptorSet>>,
 
     frame_idx: u32
 }
@@ -116,7 +119,7 @@ impl VulkanSwapchain
             {
                 format: Format::D32_SFLOAT,
                 view_type: ImageViewType::Dim2dArray,
-                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT,
                 subresource_range: ImageSubresourceRange
                 {
                     aspects: ImageAspects::DEPTH,
@@ -158,9 +161,24 @@ impl VulkanSwapchain
                 }
             ).unwrap();
 
+            let desc_layout = DescriptorSetLayout::new(vk_state.device.clone(), DescriptorSetLayoutCreateInfo
+            {
+                flags: DescriptorSetLayoutCreateFlags::empty(),
+                bindings: [(
+                    0,
+                    DescriptorSetLayoutBinding {
+                        stages: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                        ..DescriptorSetLayoutBinding::descriptor_type(
+                            DescriptorType::UniformBuffer,
+                        )
+                    },
+                )].into_iter().collect(),
+                ..Default::default()
+            }).unwrap();
+
             let desc = DescriptorSet::new(
                 vk_state.allocators.desc.clone(),
-                vk_state.pipelines.tinted.layout().set_layouts()[0].clone(),
+                desc_layout,
                 [WriteDescriptorSet::buffer(0, buffer.clone())],
                 []
             ).unwrap();
@@ -172,11 +190,22 @@ impl VulkanSwapchain
             }
         }).collect::<Vec<_>>();
 
+        let depth_desc_set = frames.iter().map(|frame|
+        {
+            DescriptorSet::new(
+                vk_state.allocators.desc.clone(),
+                vk_state.pipelines.cursor.layout().set_layouts()[1].clone(),
+                [WriteDescriptorSet::image_view(0, frame.depth_frame.clone())],
+                []
+            ).unwrap()
+        }).collect::<Vec<_>>();
+
         Self
         {
             handle: swapchain_handle,
             frames,
             global_uniforms,
+            depth_desc_set,
 
             frame_idx: u32::MAX
         }
@@ -222,5 +251,10 @@ impl VulkanSwapchain
     pub fn get_global_uniform_descriptor(&self) -> &Arc<DescriptorSet>
     {
         &self.global_uniforms[self.frame_idx as usize].desc
+    }
+
+    pub fn get_depth_buffer_descriptor(&self) -> &Arc<DescriptorSet>
+    {
+        &self.depth_desc_set[self.frame_idx as usize]
     }
 }

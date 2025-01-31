@@ -13,6 +13,7 @@ vulkano-macros  = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd4603
 vulkano-shaders  = { git = "https://github.com/vulkano-rs/vulkano", rev = "cd4603b" }
 communication = { path = "./communication"}
 turbojpeg = "1.1.1"
+ahash = "0.8.11"
 
 [profile.release-with-debug]
 inherits = "release"

@@ -468,6 +468,7 @@ dependencies = [
 name = "openxr-tests"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "ash",
  "bytemuck",
  "communication",

@@ -17,7 +17,7 @@ mod object;
 mod window;
 
 use ::openxr::{self as xr, ViewConfigurationType};
-use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBuffer, CommandBufferBeginInfo, CommandBufferExecFuture, CommandBufferLevel, CommandBufferUsage, CopyBufferToImageInfo, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::{future::{FenceSignalFuture, NowFuture}, GpuFuture}, Handle};
+use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBuffer, CommandBufferBeginInfo, CommandBufferExecFuture, CommandBufferLevel, CommandBufferUsage, CopyBufferToImageInfo, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::{future::{FenceSignalFuture, NowFuture}, GpuFuture}, Handle};
 use obb::OBB;
 use window::{Window, WindowEvent};
 use communication_lib::{tcp_lib::TcpConnection, udp_lib::UdpCommunication};
@@ -167,19 +167,19 @@ fn main()
     let vk_state_mtx_conn = vk_state_mtx.clone();
     let obj_list_mtx_conn = obj_list_mtx.clone();
 
-    thread::spawn(move ||
-    {
-        println!("Attempt connection !");
+    // thread::spawn(move ||
+    // {
+    //     println!("Attempt connection !");
 
-        if let Ok(mut conn) = TcpConnection::connect("192.168.205.242:4242")
-        {
-            run_downloader_thread(conn, window_id, vk_state_mtx_conn, obj_list_mtx_conn);
-        }
-        else
-        {
-            panic!("Could not connect to server !");
-        }
-    });
+    //     if let Ok(mut conn) = TcpConnection::connect("192.168.205.242:4242")
+    //     {
+    //         run_downloader_thread(conn, window_id, vk_state_mtx_conn, obj_list_mtx_conn);
+    //     }
+    //     else
+    //     {
+    //         panic!("Could not connect to server !");
+    //     }
+    // });
 
     let mut state = AppState
     {
@@ -467,6 +467,31 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
             }
         }
 
+        builder.next_subpass(SubpassEndInfo::default(), SubpassBeginInfo
+        {
+            contents: SubpassContents::Inline,
+            ..Default::default()
+        }).unwrap()
+        .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
+        .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
+
+        unsafe
+        {
+            let pipeline = &vk_state.pipelines.cursor;
+            let layout = pipeline.layout();
+
+            println!("{:?}", layout.set_layouts());
+
+            builder
+                .bind_pipeline_graphics(pipeline.clone()).unwrap()
+                .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
+                vec![
+                    swapchain.get_global_uniform_descriptor().clone(),
+                    swapchain.get_depth_buffer_descriptor().clone()
+                ]).unwrap()
+                .draw(4, 1, 0, 0).unwrap();
+        }
+
         builder.end_render_pass(Default::default()).unwrap();
 
         let cmd_buffer = builder.end().unwrap();
@@ -508,11 +533,18 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
 
         // Global uniform buffer is updated at the last moment to use the most accurate view matrix possible
 
-        swapchain.update_global_unform(&GlobalUniformData
         {
-            left: view_to_matrix(&views[0]),
-            right: view_to_matrix(&views[1])
-        });
+            let left_matrix = view_to_matrix(&views[0]);
+            let right_matrix = view_to_matrix(&views[1]);
+
+            swapchain.update_global_unform(&GlobalUniformData
+            {
+                left: left_matrix,
+                right: right_matrix,
+                inv_left: left_matrix.inverse(),
+                inv_right: right_matrix.inverse(),
+            });
+        }
 
         swapchain.wait_frame();
 
@@ -556,102 +588,102 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
     }
 }
 
-fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_mtx: Arc<Mutex<VulkanState>>, obj_list_mtx: Arc<Mutex<ObjectList>>)
-{
-    let mut times : Vec<f64> = vec![];
-    let mut last_frame : Option<Instant> = None;
-    let mut frame_count = 0;
+// fn run_downloader_thread(mut conn: TcpConnection, window_id: ObjectID, vk_state_mtx: Arc<Mutex<VulkanState>>, obj_list_mtx: Arc<Mutex<ObjectList>>)
+// {
+//     let mut times : Vec<f64> = vec![];
+//     let mut last_frame : Option<Instant> = None;
+//     let mut frame_count = 0;
 
-    let mut udp = UdpCommunication::new("0.0.0.0:8484").expect("Could not bind UDP");
+//     let mut udp = UdpCommunication::new("0.0.0.0:8484").expect("Could not bind UDP");
 
-    println!("Connected !");
+//     println!("Connected !");
 
-    let mut cache : Option<(Subbuffer<[u8]>, Arc<CommandBuffer>)> = None;
-    let mut current_fence : Option<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> = None;
+//     let mut cache : Option<(Subbuffer<[u8]>, Arc<CommandBuffer>)> = None;
+//     let mut current_fence : Option<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> = None;
 
-    loop
-    {
-        let size : WindowSize = conn.receive_pod().expect("Could not get dat");
-        // println!("Got size ! {} {}", size.width, size.height);
+//     loop
+//     {
+//         let size : WindowSize = conn.receive_pod().expect("Could not get dat");
+//         // println!("Got size ! {} {}", size.width, size.height);
 
-        let data = udp.receive();
-        // println!("Got data {} !", data.is_ok());
+//         let data = udp.receive();
+//         // println!("Got data {} !", data.is_ok());
 
-        // conn.send_pod(&0u32).expect("Could not send OK signal");
+//         // conn.send_pod(&0u32).expect("Could not send OK signal");
 
-        let Ok((bytes, origin)) = data else { continue; };
+//         let Ok((bytes, origin)) = data else { continue; };
 
-        let struct_size = std::mem::size_of::<FrameData>();
+//         let struct_size = std::mem::size_of::<FrameData>();
 
-        let size = bytemuck::from_bytes::<FrameData>(&bytes[..struct_size]);
-        let Ok(data) = turbojpeg::decompress(&bytes[struct_size..], turbojpeg::PixelFormat::RGB) else { println!("Could not decode JPEG"); continue; };
+//         let size = bytemuck::from_bytes::<FrameData>(&bytes[..struct_size]);
+//         let Ok(data) = turbojpeg::decompress(&bytes[struct_size..], turbojpeg::PixelFormat::RGB) else { println!("Could not decode JPEG"); continue; };
 
-        if let Some(fence) = current_fence
-        {
-            fence.wait(None).unwrap();
-            current_fence = None;
-        }
+//         if let Some(fence) = current_fence
+//         {
+//             fence.wait(None).unwrap();
+//             current_fence = None;
+//         }
 
-        {
-            let mut vk_state = vk_state_mtx.lock().expect("Could not get Vulkan lock");
-            let mut obj_list = obj_list_mtx.lock().expect("Could not get ObjList lock");
+//         {
+//             let mut vk_state = vk_state_mtx.lock().expect("Could not get Vulkan lock");
+//             let mut obj_list = obj_list_mtx.lock().expect("Could not get ObjList lock");
 
-            let obj = obj_list.get_mut_object(window_id).expect("Could not get window obj");
-            let ObjectKind::Window { window } = &mut obj.kind else { panic!("Window object is not a window quad") };
+//             let obj = obj_list.get_mut_object(window_id).expect("Could not get window obj");
+//             let ObjectKind::Window { window } = &mut obj.kind else { panic!("Window object is not a window quad") };
 
-            let win_size = window.size();
+//             let win_size = window.size();
 
-            if let Some((buf, cmd_buffer)) = &cache
-            {
-                (*buf.write().unwrap()).copy_from_slice(&data.pixels.as_slice());
-                let fence = cmd_buffer.clone().execute(vk_state.queue.clone()).expect("Could not execute cmd buffer")
-                    .then_signal_fence_and_flush().unwrap();
+//             if let Some((buf, cmd_buffer)) = &cache
+//             {
+//                 (*buf.write().unwrap()).copy_from_slice(&data.pixels.as_slice());
+//                 let fence = cmd_buffer.clone().execute(vk_state.queue.clone()).expect("Could not execute cmd buffer")
+//                     .then_signal_fence_and_flush().unwrap();
 
-                current_fence = Some(fence);
-            }
-            else if size.width == win_size.0 && size.height == win_size.1
-            {
-                let buf = Buffer::from_iter(
-                    vk_state.allocators.std.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::TRANSFER_SRC,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
-                    data.pixels.into_iter()
-                ).expect("Could not create buffer");
+//                 current_fence = Some(fence);
+//             }
+//             else if size.width == win_size.0 && size.height == win_size.1
+//             {
+//                 let buf = Buffer::from_iter(
+//                     vk_state.allocators.std.clone(),
+//                     BufferCreateInfo {
+//                         usage: BufferUsage::TRANSFER_SRC,
+//                         ..Default::default()
+//                     },
+//                     AllocationCreateInfo {
+//                         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+//                         ..Default::default()
+//                     },
+//                     data.pixels.into_iter()
+//                 ).expect("Could not create buffer");
 
-                let mut builder = RecordingCommandBuffer::new(vk_state.allocators.cmd.clone(),
-                                                            vk_state.queue_family_index,
-                                                            CommandBufferLevel::Primary,
-                                                            CommandBufferBeginInfo{ usage: CommandBufferUsage::MultipleSubmit, ..Default::default() }).unwrap();
+//                 let mut builder = RecordingCommandBuffer::new(vk_state.allocators.cmd.clone(),
+//                                                             vk_state.queue_family_index,
+//                                                             CommandBufferLevel::Primary,
+//                                                             CommandBufferBeginInfo{ usage: CommandBufferUsage::MultipleSubmit, ..Default::default() }).unwrap();
 
-                builder.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(buf.clone(), window.texture.view.image().clone()));
-                let cmd_buffer = builder.end().expect("Could not finalize cmd buffer");
-                let fence = cmd_buffer.clone().execute(vk_state.queue.clone()).expect("Could not execute cmd buffer")
-                        .then_signal_fence_and_flush().unwrap();
+//                 builder.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(buf.clone(), window.texture.view.image().clone()));
+//                 let cmd_buffer = builder.end().expect("Could not finalize cmd buffer");
+//                 let fence = cmd_buffer.clone().execute(vk_state.queue.clone()).expect("Could not execute cmd buffer")
+//                         .then_signal_fence_and_flush().unwrap();
 
-                cache = Some((buf, cmd_buffer));
-                current_fence = Some(fence);
-            }
-            else
-            {
-                // new_rgb => texture will be sampled and interpolated linearly when magnified or minified
-                // new_pixelated_rgb => texture will be sampled to be rendered like Minecraft
-                let texture = VulkanTexture::new_pixelated_rgb(size.width, size.height, &data.pixels, &vk_state);
+//                 cache = Some((buf, cmd_buffer));
+//                 current_fence = Some(fence);
+//             }
+//             else
+//             {
+//                 // new_rgb => texture will be sampled and interpolated linearly when magnified or minified
+//                 // new_pixelated_rgb => texture will be sampled to be rendered like Minecraft
+//                 let texture = VulkanTexture::new_pixelated_rgb(size.width, size.height, &data.pixels, &vk_state);
 
-                // Update quad aspect ratio
-                window.refresh_content(texture, &mut obj.obb);
-            }
+//                 // Update quad aspect ratio
+//                 window.refresh_content(texture, &mut obj.obb);
+//             }
 
-            // last_frame = Some(end);
-            frame_count += 1;
-        }
-    }
-}
+//             // last_frame = Some(end);
+//             frame_count += 1;
+//         }
+//     }
+// }
 
 fn get_raycast_tint(ray: &Ray, cube_ids: &[ObjectID], obj_list: &ObjectList) -> glam::Vec4
 {

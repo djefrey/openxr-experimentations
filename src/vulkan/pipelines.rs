@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use vulkano::{device::Device, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{RenderPass, Subpass}};
+use vulkano::{device::Device, pipeline::{graphics::{color_blend::{AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState, PrimitiveTopology}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition, VertexInputState}, viewport::ViewportState, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{RenderPass, Subpass}, shader::ShaderStages};
 
 use crate::vulkan::buffers::{LineVertex, TexturedVertex, TintedVertex};
 
@@ -10,6 +10,7 @@ pub struct VulkanPipelines
     pub tinted_debug: Arc<GraphicsPipeline>,
     pub textured: Arc<GraphicsPipeline>,
     pub line: Arc<GraphicsPipeline>,
+    pub cursor: Arc<GraphicsPipeline>,
 }
 
 impl VulkanPipelines
@@ -31,6 +32,11 @@ impl VulkanPipelines
             vulkano_shaders::shader! { ty: "vertex", path: "./shaders/line.vert" }
         }
 
+        mod fullscreen_fs
+        {
+            vulkano_shaders::shader! { ty: "vertex", path: "./shaders/fullscreen.vert" }
+        }
+
         mod tinted_fs
         {
             vulkano_shaders::shader! { ty: "fragment", path: "./shaders/tinted.frag" }
@@ -39,6 +45,11 @@ impl VulkanPipelines
         mod textured_fs
         {
             vulkano_shaders::shader! { ty: "fragment", path: "./shaders/textured.frag" }
+        }
+
+        mod cursor_fs
+        {
+            vulkano_shaders::shader! { ty: "fragment", path: "./shaders/cursor.frag" }
         }
 
         let tinted =
@@ -57,12 +68,18 @@ impl VulkanPipelines
                 PipelineShaderStageCreateInfo::new(fs),
             ];
 
-            let layout = PipelineLayout::new(
-                device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(device.clone())
-                    .unwrap()
-            ).ok().unwrap();
+            let layout = {
+                let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap()
+                ).ok().unwrap()
+            };
 
             let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
@@ -82,7 +99,12 @@ impl VulkanPipelines
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.num_color_attachments() as u32,
-                        ColorBlendAttachmentState::default())
+                        ColorBlendAttachmentState
+                        {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_enable: true,
+                            color_write_mask: ColorComponents::all()
+                        })
                     ),
                     dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
                     subpass: Some(subpass.into()),
@@ -114,12 +136,18 @@ impl VulkanPipelines
                 PipelineShaderStageCreateInfo::new(fs),
             ];
 
-            let layout = PipelineLayout::new(
-                device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(device.clone())
-                    .unwrap()
-            ).ok().unwrap();
+            let layout = {
+                let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap()
+                ).ok().unwrap()
+            };
 
             let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
@@ -140,7 +168,12 @@ impl VulkanPipelines
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.num_color_attachments() as u32,
-                        ColorBlendAttachmentState::default())
+                        ColorBlendAttachmentState
+                        {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_enable: true,
+                            color_write_mask: ColorComponents::all()
+                        })
                     ),
                     dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
                     subpass: Some(subpass.into()),
@@ -172,12 +205,18 @@ impl VulkanPipelines
                 PipelineShaderStageCreateInfo::new(fs),
             ];
 
-            let layout = PipelineLayout::new(
-                device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(device.clone())
-                    .unwrap()
-            ).ok().unwrap();
+            let layout = {
+                let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap()
+                ).ok().unwrap()
+            };
 
             let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
@@ -197,7 +236,12 @@ impl VulkanPipelines
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.num_color_attachments() as u32,
-                        ColorBlendAttachmentState::default())
+                        ColorBlendAttachmentState
+                        {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_enable: true,
+                            color_write_mask: ColorComponents::all()
+                        })
                     ),
                     dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
                     subpass: Some(subpass.into()),
@@ -229,12 +273,18 @@ impl VulkanPipelines
                 PipelineShaderStageCreateInfo::new(fs),
             ];
 
-            let layout = PipelineLayout::new(
-                device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(device.clone())
-                    .unwrap()
-            ).ok().unwrap();
+            let layout = {
+                let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap()
+                ).ok().unwrap()
+            };
 
             let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
@@ -253,7 +303,12 @@ impl VulkanPipelines
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.num_color_attachments() as u32,
-                        ColorBlendAttachmentState::default())
+                        ColorBlendAttachmentState
+                        {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_enable: true,
+                            color_write_mask: ColorComponents::all()
+                        })
                     ),
                     dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
                     subpass: Some(subpass.into()),
@@ -269,12 +324,74 @@ impl VulkanPipelines
             ).unwrap()
         };
 
+        let cursor =
+        {
+            let vs = fullscreen_fs::load(device.clone()).unwrap()
+                .entry_point("main").unwrap();
+
+            let fs = cursor_fs::load(device.clone()).unwrap()
+                .entry_point("main").unwrap();
+
+            let stages =
+            [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = {
+                let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                println!("{:?}", create_info.set_layouts);
+
+                create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap()
+                ).ok().unwrap()
+            };
+
+            let subpass = Subpass::from(render_pass.clone(), 1).unwrap();
+
+            GraphicsPipeline::new(device.clone(), None,
+                GraphicsPipelineCreateInfo
+                {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(VertexInputState::new()),
+                    input_assembly_state: Some(InputAssemblyState
+                    {
+                        topology: PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    }),
+                    viewport_state: Some(ViewportState::default()),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        subpass.num_color_attachments() as u32,
+                        ColorBlendAttachmentState
+                        {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_enable: true,
+                            color_write_mask: ColorComponents::all()
+                        })
+                    ),
+                    dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
+                    subpass: Some(subpass.into()),
+                    depth_stencil_state: None,
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                }
+            ).unwrap()
+        };
+
         Self
         {
             tinted,
             tinted_debug,
             textured,
             line,
+            cursor,
         }
     }
 }

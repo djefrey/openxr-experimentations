@@ -11,7 +11,7 @@ use pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendSta
 use pipelines::VulkanPipelines;
 use swapchain::VulkanSwapchain;
 use texture::VulkanTexture;
-use vulkano::{*, format::Format, instance::*, device::*, device::physical::*, render_pass::*};
+use vulkano::{device::{physical::*, *}, format::Format, instance::*, render_pass::*, sync::{AccessFlags, DependencyFlags, PipelineStages}, *};
 use ash::vk::{self, Handle, PhysicalDeviceFeatures};
 
 use crate::{object::{Object, ObjectKind}, openxr::{XRSetupState, XRState}, Transform};
@@ -178,6 +178,23 @@ impl VulkanState
                         view_mask: 0b11,
                         ..Default::default()
                     },
+                    SubpassDescription
+                    {
+                        input_attachments: vec![Some(AttachmentReference
+                        {
+                            attachment: 1,
+                            layout: image::ImageLayout::ShaderReadOnlyOptimal,
+                            ..Default::default()
+                        })],
+                        color_attachments: vec![Some(AttachmentReference
+                        {
+                            attachment: 0,
+                            layout: image::ImageLayout::ColorAttachmentOptimal,
+                            ..Default::default()
+                        })],
+                        view_mask: 0b11,
+                        ..Default::default()
+                    },
                 ],
                 dependencies: vec![SubpassDependency
                 {
@@ -185,6 +202,17 @@ impl VulkanState
                     src_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT | sync::PipelineStages::EARLY_FRAGMENT_TESTS,
                     dst_stages: sync::PipelineStages::COLOR_ATTACHMENT_OUTPUT | sync::PipelineStages::EARLY_FRAGMENT_TESTS,
                     dst_access: sync::AccessFlags::COLOR_ATTACHMENT_WRITE | sync::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    ..Default::default()
+                }, SubpassDependency // Ensure that first subpass has finished writing to the depth buffer
+                {
+                    src_subpass: Some(0),
+                    dst_subpass: Some(1),
+                    dependency_flags: DependencyFlags::BY_REGION | DependencyFlags::VIEW_LOCAL,
+                    src_stages: PipelineStages::LATE_FRAGMENT_TESTS,
+                    src_access: AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    dst_stages: PipelineStages::FRAGMENT_SHADER,
+                    dst_access: AccessFlags::SHADER_READ,
+                    view_offset: 0,
                     ..Default::default()
                 }],
                 correlated_view_masks: vec![0b11],
