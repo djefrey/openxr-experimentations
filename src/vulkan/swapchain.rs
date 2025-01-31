@@ -15,10 +15,11 @@ use super::VulkanState;
 #[derive(BufferContents, Clone, Copy)]
 pub struct GlobalUniformData
 {
-    pub left: Mat4,
-    pub right: Mat4,
-    pub inv_left: Mat4,
-    pub inv_right: Mat4
+    pub view: [Mat4; 2],
+    pub proj: [Mat4; 2],
+    pub proj_view: [Mat4; 2],
+    pub inv_view: [Mat4; 2],
+    pub inv_proj: [Mat4; 2],
 }
 
 struct SwapchainFrame

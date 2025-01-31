@@ -6,7 +6,7 @@ use glam::{vec3, vec4, Quat, Vec3, Vec4};
 use object::{ObjectID, ObjectKind, ObjectList};
 use openxr::{CompositionLayerPassthroughFB, XRSetupState, XRState};
 use ray::Ray;
-use vulkan::{swapchain::{self, GlobalUniformData, VulkanSwapchain}, texture::VulkanTexture, RenderState, VulkanState};
+use vulkan::{buffers::CursorData, swapchain::{self, GlobalUniformData, VulkanSwapchain}, texture::VulkanTexture, RenderState, VulkanState};
 
 mod openxr;
 mod vulkan;
@@ -62,12 +62,13 @@ struct AppState
 {
     hand: Option<Hand>,
     gestures: GestureState,
+    cursors: Vec<Vec3>,
     show_debug: bool,
 
     // Object IDs
 
     window_id: ObjectID,
-    cube_ids: [ObjectID; 5],
+    cube_ids: Vec<ObjectID>,
     tip_ids: [ObjectID; 5],
     hand_id: ObjectID,
     raycast_id: ObjectID
@@ -89,11 +90,20 @@ fn main()
     let mut obj_list = ObjectList::new();
     let mut gestures = GestureState::new();
 
-    let cube_ids : [ObjectID; 5] = array::from_fn(|i| obj_list.new_object(
-        ObjectKind::DebugCube,
-        Transform::new(vec3(0.0, 1.5, -1.0 - (i as f32) * 0.5), Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
-        Some(OBB::CUBE_OBB)
-    ));
+    let cube_data : [(Vec3, Vec4); 4] = [
+        (vec3(0.0, 0.0, 0.0), vec4(1.0, 1.0, 1.0, 1.0)),
+        (vec3(1.0, 0.0, 0.0), vec4(1.0, 0.0, 0.0, 1.0)),
+        (vec3(0.0, 1.0, 0.0), vec4(0.0, 1.0, 0.0, 1.0)),
+        (vec3(0.0, 0.0, 1.0), vec4(0.0, 0.0, 1.0, 1.0)),
+    ];
+
+    let cube_ids = cube_data.iter().map(|(pos, color)|
+        obj_list.new_object(
+            ObjectKind::TintedCube { tint: *color },
+            Transform::new(*pos, Quat::IDENTITY, vec3(0.3, 0.3, 0.3)),
+            Some(OBB::CUBE_OBB)
+        )
+    ).collect::<Vec<_>>();
 
     let bmp_data : [u8; 27] = [
         // TOP
@@ -185,6 +195,7 @@ fn main()
     {
         hand,
         gestures,
+        cursors: vec![],
         show_debug,
 
         window_id,
@@ -255,6 +266,7 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
     app_state.hand = Hand::from_xr_state(&xr_state, frame_state.predicted_display_time);
 
     let mut colliding_tips : [bool; 5] = [false; 5];
+    let mut cursors : Vec<Vec3> = Vec::new();
 
     {
         let mut obj_list = obj_list_mtx.lock().expect("Could not get ObjList lock");
@@ -265,6 +277,30 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
 
             let obj = obj_list.get_mut_object(gesture.id).unwrap();
 
+            if let Some(obb) = obj.compute_obb()
+            {
+                if let Some(hand) = &app_state.hand
+                {
+                    match &gesture.kind
+                    {
+                        GestureKind::Grab { tips } | GestureKind::Tap { tips } =>
+                        {
+                            cursors.append(&mut tips.iter().map(|tip|
+                            {
+                                // TODO: project tip on OBB
+                                hand.get_tip(tip.to_idx()).unwrap().pos
+                            }).collect::<Vec<_>>());
+                        },
+                        GestureKind::Ray { dist } =>
+                        {
+                            let ray = hand.compute_ray();
+
+                            cursors.push(ray.to_points(*dist)[1]);
+                        }
+                    }
+                }
+            }
+
             match &mut obj.kind
             {
                 ObjectKind::DebugCube | ObjectKind::TintedCube { tint: _ } | ObjectKind::TexturedQuad { texture: _ } =>
@@ -273,7 +309,7 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                     {
                         match gesture.kind
                         {
-                            GestureKind::Grab { tips: _} | GestureKind::Ray =>
+                            GestureKind::Grab { tips: _ } | GestureKind::Ray { dist: _ } =>
                             {
                                 if let Some(diff) = app_state.gestures.transform_since_last_frame(&obj.transform.pos)
                                 {
@@ -364,6 +400,8 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
             }
         }
     }
+
+    app_state.cursors = cursors;
 }
 
 fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &Arc<Mutex<VulkanState>>, obj_list_mtx: &Arc<Mutex<ObjectList>>, swapchain: &mut Option<VulkanSwapchain>, state: &mut AppState)
@@ -475,21 +513,40 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
         .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
         .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
 
-        unsafe
+        if !state.cursors.is_empty()
         {
-            let pipeline = &vk_state.pipelines.cursor;
-            let layout = pipeline.layout();
+            unsafe
+            {
+                let pipeline = &vk_state.pipelines.cursor;
+                let layout = pipeline.layout();
 
-            println!("{:?}", layout.set_layouts());
+                builder
+                    .bind_pipeline_graphics(pipeline.clone()).unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
+                    vec![
+                        swapchain.get_global_uniform_descriptor().clone(),
+                        swapchain.get_depth_buffer_descriptor().clone()
+                    ]).unwrap();
 
-            builder
-                .bind_pipeline_graphics(pipeline.clone()).unwrap()
-                .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
-                vec![
-                    swapchain.get_global_uniform_descriptor().clone(),
-                    swapchain.get_depth_buffer_descriptor().clone()
-                ]).unwrap()
-                .draw(4, 1, 0, 0).unwrap();
+                println!(" --- ");
+
+                for cursor in &state.cursors
+                {
+                    println!("{}", cursor);
+                    println!("{:?}", layout.push_constant_ranges());
+
+                    builder
+                        .push_constants(layout.clone(), 0, CursorData
+                        {
+                            radius: 0.0045,
+                            size:   0.0015,
+                            pos: *cursor,
+                            _padding: [0.0, 0.0],
+                            _padding2: 0.0,
+                        }).unwrap()
+                        .draw(4, 1, 0, 0).unwrap();
+                }
+            }
         }
 
         builder.end_render_pass(Default::default()).unwrap();
@@ -500,7 +557,7 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
 
         let (_, views) = xr_state.session.locate_views(ViewConfigurationType::PRIMARY_STEREO, frame_state.predicted_display_time, &xr_state.stage).unwrap();
 
-        let view_to_matrix = |view: &xr::View| -> glam::Mat4
+        let view_to_matrix = |view: &xr::View| -> (glam::Mat4, glam::Mat4, glam::Mat4)
         {
             let pos = view.pose.position;
             let rot = view.pose.orientation;
@@ -528,21 +585,22 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                 glam::vec4(0.0,         0.0,         -(far_z * near_z) / (far_z - near_z),   0.0)
             );
 
-            return proj.mul_mat4(&view);
+            return (view, proj, proj.mul_mat4(&view));
         };
 
         // Global uniform buffer is updated at the last moment to use the most accurate view matrix possible
 
         {
-            let left_matrix = view_to_matrix(&views[0]);
-            let right_matrix = view_to_matrix(&views[1]);
+            let (left_view, left_proj, left_proj_view) = view_to_matrix(&views[0]);
+            let (right_view, right_proj, right_proj_view) = view_to_matrix(&views[1]);
 
             swapchain.update_global_unform(&GlobalUniformData
             {
-                left: left_matrix,
-                right: right_matrix,
-                inv_left: left_matrix.inverse(),
-                inv_right: right_matrix.inverse(),
+                view: [left_view, right_view],
+                proj: [left_proj, right_proj],
+                proj_view: [left_proj_view, right_proj_view],
+                inv_view: [left_view.inverse(), right_view.inverse()],
+                inv_proj: [left_proj.inverse(), right_proj.inverse()],
             });
         }
 

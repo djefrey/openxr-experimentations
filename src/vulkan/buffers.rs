@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{gestures::Hand, ray::Ray};
 
-use glam::{Mat4, Vec4};
+use glam::{Mat4, Vec3, Vec4};
 use openxr as xr;
 use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}};
 use vulkano_macros::{BufferContents, Vertex};
@@ -127,6 +127,16 @@ pub struct TintedObjectData
     pub tint: Vec4
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, BufferContents)]
+pub struct CursorData
+{
+    pub radius: f32,
+    pub size: f32,
+    pub _padding: [f32; 2],
+    pub pos: Vec3,
+    pub _padding2: f32,
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Vertex, bytemuck::Pod, bytemuck::Zeroable)] // BufferContents impl by Pod + Zeroable

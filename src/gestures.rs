@@ -11,7 +11,7 @@ pub enum GestureKind
 {
     Tap { tips: Vec<HandTip> },
     Grab { tips: Vec<HandTip> },
-    Ray,
+    Ray { dist: f32 },
 }
 
 impl PartialEq for GestureKind
@@ -419,9 +419,9 @@ impl GestureState
             }
         }
 
-        if let Some((id, _)) = ray_hit
+        if let Some((id, dist)) = ray_hit
         {
-            return Some((id, GestureKind::Ray));
+            return Some((id, GestureKind::Ray { dist }));
         }
 
         return None;
@@ -469,9 +469,9 @@ impl GestureState
 
         if thumb_tip.distance_squared(index_tip) < 0.0003
         {
-            if obb.does_intersects_ray(&ray).is_some()
+            if let Some(dist) = obb.does_intersects_ray(&ray)
             {
-                return Some(GestureKind::Ray);
+                return Some(GestureKind::Ray { dist });
             }
         }
 

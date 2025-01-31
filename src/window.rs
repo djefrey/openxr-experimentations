@@ -103,7 +103,7 @@ impl Window
                 {
                     GestureKind::Tap { tips } => Some(WindowEvent::ContentInteract { tips }),
                     GestureKind::Grab { tips } => Some(WindowEvent::ContentInteract { tips }),
-                    GestureKind::Ray => Some(WindowEvent::ContentInteract { tips: vec![HandTip::THUMB, HandTip::MIDDLE, HandTip::LITTLE] }),
+                    GestureKind::Ray { dist: _ } => Some(WindowEvent::ContentInteract { tips: vec![HandTip::THUMB, HandTip::MIDDLE, HandTip::LITTLE] }),
                 }
             }
 
@@ -111,7 +111,7 @@ impl Window
 
             match gesture.kind
             {
-                GestureKind::Grab { tips: _} | GestureKind::Ray =>
+                GestureKind::Grab { tips: _ } | GestureKind::Ray { dist: _ }=>
                 {
                     if let Some(diff) = gestures.transform_since_last_frame(&transform.pos)
                     {
