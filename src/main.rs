@@ -18,7 +18,7 @@ mod window;
 
 use ::openxr::{self as xr, ViewConfigurationType};
 use vulkano::{buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::StandardCommandBufferAllocator, CommandBuffer, CommandBufferBeginInfo, CommandBufferExecFuture, CommandBufferLevel, CommandBufferUsage, CopyBufferToImageInfo, RecordingCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, DescriptorSet, WriteDescriptorSet}, format::{self, ClearValue}, image::{self, sys::RawImage, view::{ImageView, ImageViewCreateInfo, ImageViewType}, ImageAspects, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::viewport::{Scissor, Viewport}, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateFlags, FramebufferCreateInfo}, sync::{future::{FenceSignalFuture, NowFuture}, GpuFuture}, Handle};
-use obb::OBB;
+use obb::{ComputedOOB, OBB};
 use window::{Window, WindowEvent};
 use communication_lib::{tcp_lib::TcpConnection, udp_lib::UdpCommunication};
 
@@ -281,22 +281,86 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
         {
             if let Some(hand) = &app_state.hand
             {
-                let ray = hand.compute_ray();
-                let mut closest : Option<f32> = None;
+                let obb_list : Vec<(ObjectID, ComputedOOB)> = obj_list.iter()
+                    .filter_map(|(id, obj)| obj.compute_obb().and_then(|obb| Some((id, obb))))
+                    .collect();
 
-                for (_, obj) in obj_list.iter()
+                // Compute tip cursors
                 {
-                    if let Some(dist) = obj.compute_obb().and_then(|obb| obb.does_intersects_ray(&ray))
+                    let mut closest_obj : Option<(ObjectID, f32, ComputedOOB)> = None;
+                    let mut valid_tips : Vec<Vec3> = Vec::new();
+                    const THREASHOLD : f32 = 0.1; // m
+
+                    for ray in hand.tip_rays()
                     {
-                        closest = Some(dist.min(closest.unwrap_or(f32::MAX)));
+                        for (id, obb) in obb_list.iter()
+                        {
+                            if let Some(dist) = obb.does_intersects_ray(&ray)
+                            {
+                                if dist > THREASHOLD
+                                {
+                                    continue;
+                                }
+
+                                if let Some((closest_id, closest_dist, _)) = closest_obj
+                                {
+                                    if closest_id != *id
+                                    {
+                                        if dist < closest_dist
+                                        {
+                                            closest_obj = Some((*id, dist, *obb));
+                                            valid_tips.clear();
+                                        }
+                                        else
+                                        {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    closest_obj = Some((*id, dist, *obb));
+                                }
+
+                                valid_tips.push(ray.origin);
+                            }
+
+                        }
+                    }
+
+                    if let Some((id, _, obb)) = closest_obj
+                    {
+                        let obj = obj_list.get_object(id).expect("Could not get object");
+
+                        let center = obj.transform.pos;
+                        let normal = obj.transform.forward();
+
+                        for tip in valid_tips
+                        {
+                            cursors.push(obb.project_point(&tip));
+                        }
                     }
                 }
 
-                if let Some(dist) = closest
+                if cursors.is_empty() // Show ray cursor
                 {
-                    let pos = ray.to_points(dist)[1];
+                    let ray = hand.compute_ray();
+                    let mut closest : Option<f32> = None;
 
-                    cursors.push(pos);
+                    for (_, obb) in obb_list.into_iter()
+                    {
+                        if let Some(dist) = obb.does_intersects_ray(&ray)
+                        {
+                            closest = Some(dist.min(closest.unwrap_or(f32::MAX)));
+                        }
+                    }
+
+                    if let Some(dist) = closest
+                    {
+                        let pos = ray.to_points(dist)[1];
+
+                        cursors.push(pos);
+                    }
                 }
             }
         }
@@ -319,7 +383,7 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                             {
                                 let tip_pos = hand.get_tip(tip.to_idx()).unwrap().pos;
 
-                                obb.project_point(tip_pos)
+                                obb.project_point(&tip_pos)
                             }).collect::<Vec<_>>());
                         },
                         GestureKind::Ray { dist } =>

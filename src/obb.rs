@@ -171,7 +171,7 @@ impl ComputedOOB
         return true;
     }
 
-    pub fn project_point(&self, point: Vec3) -> Vec3
+    pub fn project_point(&self, point: &Vec3) -> Vec3
     {
         let point_cube_space = self.rot.inverse() * (point - self.center);
         let mut ortho_proj = point_cube_space.clamp(-self.half_size, self.half_size);

@@ -165,6 +165,27 @@ impl Hand
 
         return Ray::new_assume_normalize(start, v);
     }
+
+    pub fn tip_rays(&self) -> [Ray; 5]
+    {
+        const TIPS : [(xr::HandJointEXT, xr::HandJointEXT); 5] = [
+            (xr::HandJointEXT::THUMB_TIP, xr::HandJointEXT::THUMB_DISTAL),
+            (xr::HandJointEXT::INDEX_TIP, xr::HandJointEXT::INDEX_DISTAL),
+            (xr::HandJointEXT::MIDDLE_TIP, xr::HandJointEXT::MIDDLE_DISTAL),
+            (xr::HandJointEXT::RING_TIP, xr::HandJointEXT::RING_DISTAL),
+            (xr::HandJointEXT::LITTLE_TIP, xr::HandJointEXT::LITTLE_DISTAL),
+        ];
+
+        TIPS.map(|(tip, distal)|
+        {
+            let tip_pos = self.0[tip].pos;
+            let distal_pos = self.0[distal].pos;
+
+            let v = tip_pos - distal_pos;
+
+            Ray::new(tip_pos, v)
+        })
+    }
 }
 
 impl Index<usize> for Hand
