@@ -195,6 +195,23 @@ impl VulkanState
                         view_mask: 0b11,
                         ..Default::default()
                     },
+                    SubpassDescription
+                    {
+                        color_attachments: vec![Some(AttachmentReference
+                        {
+                            attachment: 0,
+                            layout: image::ImageLayout::ColorAttachmentOptimal,
+                            ..Default::default()
+                        })],
+                        depth_stencil_attachment: Some(AttachmentReference
+                        {
+                            attachment: 1,
+                            layout: image::ImageLayout::DepthAttachmentStencilReadOnlyOptimal,
+                            ..Default::default()
+                        }),
+                        view_mask: 0b11,
+                        ..Default::default()
+                    },
                 ],
                 dependencies: vec![SubpassDependency
                 {

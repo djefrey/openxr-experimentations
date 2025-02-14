@@ -84,7 +84,6 @@ struct AppState
 
     window_id: ObjectID,
     cube_ids: Vec<ObjectID>,
-    tip_ids: [ObjectID; 5],
     hand_id: ObjectID,
     raycast_id: ObjectID
 }
@@ -153,15 +152,6 @@ fn main()
         &mut obj_list
     );
 
-    let tip_ids : [ObjectID; 5] = array::from_fn(|_|
-    {
-        obj_list.new_object(
-            ObjectKind::TintedCube { tint: Vec4::ONE },
-            Transform::new(Vec3::ZERO, Quat::IDENTITY, vec3(0.03, 0.03, 0.03)),
-            None
-        )
-    });
-
     let hand_id = obj_list.new_object(ObjectKind::Hand
         {
             hand: Hand::IDENTITY,
@@ -181,7 +171,7 @@ fn main()
         None
     );
 
-    let show_debug = false;
+    let show_debug = true;
 
     let mut last_frame : Instant = Instant::now();
 
@@ -215,7 +205,6 @@ fn main()
 
         window_id,
         cube_ids,
-        tip_ids,
         hand_id,
         raycast_id
     };
@@ -408,18 +397,6 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
         // DEBUG
         if app_state.show_debug
         {
-            for (i, &tip) in app_state.tip_ids.iter().enumerate()
-            {
-                let obj = obj_list.get_mut_object(tip).expect("Could not get tip");
-
-                let tint = if colliding_tips[i] { Vec4::Y } else { Vec4::X };
-                let new_transform = app_state.hand.as_ref().and_then(|hand| hand.get_tip(i)).unwrap_or(Transform::IDENTITY);
-
-                obj.transform.pos = new_transform.pos;
-                obj.transform.rot = new_transform.rot;
-                obj.kind = ObjectKind::TintedCube { tint };
-            }
-
             {
                 let hand_obj = obj_list.get_mut_object(app_state.hand_id).expect("Could not get hand obj");
                 let ObjectKind::Hand { hand: obj_hand, buffer } = &mut hand_obj.kind else { panic!("Hand object is not hand") };
@@ -517,22 +494,6 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                     {
                         vk_state.render_textured_quad(&obj.transform, texture, &mut render_state);
                     },
-                    ObjectKind::Hand { hand, buffer } =>
-                    {
-                        if !state.show_debug { continue 'top; }
-
-                        let tint = glam::vec4(0.0, 0.0, 1.0, 1.0);
-
-                        vk_state.buffers.update_hand_wireframe_buffer(buffer, hand);
-                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
-                    },
-                    ObjectKind::Raycast { ray, tint, buffer } =>
-                    {
-                        if !state.show_debug { continue 'top; }
-
-                        vk_state.buffers.update_raycast_buffer(buffer, ray);
-                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
-                    },
                     ObjectKind::Window { window } =>
                     {
                         window.draw(&obj.transform, &vk_state, &mut render_state);
@@ -545,11 +506,15 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
 
                         // vk_state.render_tinted_cube_wireframe(&obb_transform, &vec4(0.0, 0.0, 1.0, 0.66), &mut render_state);
                     }
+                    ObjectKind::Hand { buffer: _, hand: _ }
+                    | ObjectKind::Raycast { ray: _, tint: _, buffer: _ } => {}, // Drawn in debug subpass
                 }
             }
         }
 
-        builder.next_subpass(SubpassEndInfo::default(), SubpassBeginInfo
+        // Post Process Subpass
+
+        render_state.builder.next_subpass(SubpassEndInfo::default(), SubpassBeginInfo
         {
             contents: SubpassContents::Inline,
             ..Default::default()
@@ -564,7 +529,7 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                 let pipeline = &vk_state.pipelines.cursor;
                 let layout = pipeline.layout();
 
-                builder
+                render_state.builder
                     .bind_pipeline_graphics(pipeline.clone()).unwrap()
                     .bind_descriptor_sets(PipelineBindPoint::Graphics, layout.clone(), 0,
                     vec![
@@ -574,7 +539,7 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
 
                 for cursor in &state.cursors
                 {
-                    builder
+                    render_state.builder
                         .push_constants(layout.clone(), 0, CursorData
                         {
                             radius: 0.0045,
@@ -586,6 +551,41 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                         .draw(4, 1, 0, 0).unwrap();
                 }
             }
+        }
+
+        // Debug Subpass
+
+        render_state.builder.next_subpass(SubpassEndInfo::default(), SubpassBeginInfo
+        {
+            contents: SubpassContents::Inline,
+            ..Default::default()
+        }).unwrap()
+        .set_viewport(0, [Viewport { offset: [0.0, 0.0], extent: [width as f32, height as f32], depth_range: 0.0..=1.0 }].into_iter().collect()).unwrap()
+        .set_scissor(0, [Scissor { offset: [0, 0], extent: [width, height] }].into_iter().collect()).unwrap();
+
+        if state.show_debug
+        { unsafe
+        {
+            for (_, obj) in obj_list.iter()
+            {
+                match &obj.kind
+                {
+                    ObjectKind::Hand { hand, buffer } =>
+                    {
+                        let tint = glam::vec4(0.0, 0.0, 1.0, 1.0);
+
+                        vk_state.buffers.update_hand_wireframe_buffer(buffer, hand);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
+                    },
+                    ObjectKind::Raycast { ray, tint, buffer } =>
+                    {
+                        vk_state.buffers.update_raycast_buffer(buffer, ray);
+                        vk_state.render_wireframe(buffer.as_ref(), &tint, &mut render_state);
+                    },
+                    _ => {}
+                }
+            }
+        }
         }
 
         builder.end_render_pass(Default::default()).unwrap();
@@ -800,5 +800,5 @@ fn get_raycast_tint(ray: &Ray, cube_ids: &[ObjectID], obj_list: &ObjectList) -> 
         false
     };
 
-    return if does_intersects { glam::vec4(0.0, 1.0, 0.0, 0.0) } else { glam::vec4(1.0, 0.0, 0.0, 0.0) };
+    return if does_intersects { glam::vec4(0.0, 1.0, 0.0, 1.0) } else { glam::vec4(1.0, 0.0, 0.0, 1.0) };
 }

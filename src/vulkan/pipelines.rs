@@ -286,7 +286,7 @@ impl VulkanPipelines
                 ).ok().unwrap()
             };
 
-            let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
+            let subpass = Subpass::from(render_pass.clone(), 2).unwrap();
 
             GraphicsPipeline::new(device.clone(), None,
                 GraphicsPipelineCreateInfo
