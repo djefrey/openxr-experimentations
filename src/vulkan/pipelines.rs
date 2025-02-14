@@ -341,8 +341,6 @@ impl VulkanPipelines
             let layout = {
                 let mut create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
 
-                println!("{:?}", create_info.set_layouts);
-
                 create_info.set_layouts[0].bindings.get_mut(&0).unwrap().stages = ShaderStages::VERTEX | ShaderStages::FRAGMENT;
 
                 PipelineLayout::new(

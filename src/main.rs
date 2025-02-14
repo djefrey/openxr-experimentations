@@ -56,6 +56,21 @@ impl Transform
     {
         glam::Mat4::from_scale_rotation_translation(self.size, self.rot, self.pos)
     }
+
+    pub fn right(&self) -> glam::Vec3
+    {
+        self.rot * Vec3::X
+    }
+
+    pub fn up(&self) -> glam::Vec3
+    {
+        self.rot * Vec3::Y
+    }
+
+    pub fn forward(&self) -> glam::Vec3
+    {
+        self.rot * Vec3::Z
+    }
 }
 
 struct AppState
@@ -369,18 +384,20 @@ fn update(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                     {
                         match event
                         {
-                            WindowEvent::ContentInteract { tips } =>
+                            WindowEvent::ContentInteract { pos } =>
                             {
-                                for tip in tips
-                                {
-                                    colliding_tips[tip.to_idx()] = true;
-                                }
+                                println!("{:?}", pos);
                             },
                             WindowEvent::Close =>
                             {
                                 obj.kind = ObjectKind::Empty;
                             },
-                            WindowEvent::Drag => {}
+                            WindowEvent::Drag { transform: diff } =>
+                            {
+                                obj.transform.pos += diff.pos;
+                                obj.transform.rot  = diff.rot * obj.transform.rot;
+                                // obj.transform.size *= diff.size;
+                            }
                         }
                     }
                 },
@@ -555,13 +572,8 @@ fn render(frame_state: &xr::FrameState, xr_state: &mut XRState, vk_state_mtx: &A
                         swapchain.get_depth_buffer_descriptor().clone()
                     ]).unwrap();
 
-                println!(" --- ");
-
                 for cursor in &state.cursors
                 {
-                    println!("{}", cursor);
-                    println!("{:?}", layout.push_constant_ranges());
-
                     builder
                         .push_constants(layout.clone(), 0, CursorData
                         {

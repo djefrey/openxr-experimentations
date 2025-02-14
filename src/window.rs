@@ -8,14 +8,15 @@ pub struct Window
 {
     obj_id: ObjectID,
     title: String,
+    content_size: Vec2,
     pub texture: VulkanTexture,
     is_hovering_close: bool
 }
 
 pub enum WindowEvent
 {
-    ContentInteract { tips: Vec<HandTip> },
-    Drag,
+    ContentInteract { pos: Vec<Vec2> },
+    Drag { transform: Transform },
     Close
 }
 
@@ -38,8 +39,10 @@ impl Window
         let transform = Transform::new(pos, rot, Vec3::ONE);
         let ratio = (texture.width as f32) / (texture.height as f32);
 
-        let width = Window::WINDOW_HEIGHT * ratio;
+        let width  = Window::WINDOW_HEIGHT * ratio;
         let height = Window::WINDOW_HEIGHT;
+
+        let content_size = Vec2::new(width, Window::CONTENT_HEIGHT);
 
         let obj_id = obj_list.new_object(ObjectKind::Empty, transform, Some(OBB::new(vec3(width, height, 0.01))));
 
@@ -47,6 +50,7 @@ impl Window
         {
             obj_id,
             title,
+            content_size,
             texture,
             is_hovering_close: false
         };
@@ -97,14 +101,61 @@ impl Window
 
             if let Some(gesture) = GestureState::compute_interaction_with_obb(content_obb, hand)
             {
-                // TODO: COMPUTE HIT LOCATION
+                let mut world_pos : Vec<Vec3> = Vec::new();
 
-                return match gesture
+                let center = transform.pos + vec3(0.0, Window::CONTENT_OFFSET, 0.0);
+                let normal = transform.forward();
+
+                match gesture
                 {
-                    GestureKind::Tap { tips } => Some(WindowEvent::ContentInteract { tips }),
-                    GestureKind::Grab { tips } => Some(WindowEvent::ContentInteract { tips }),
-                    GestureKind::Ray { dist: _ } => Some(WindowEvent::ContentInteract { tips: vec![HandTip::THUMB, HandTip::MIDDLE, HandTip::LITTLE] }),
+                    GestureKind::Tap { tips } =>
+                    {
+                        for tip in tips
+                        {
+                            let Some(tip_pos) = hand.get_tip(tip.to_idx()) else { continue; };
+
+                            world_pos.push(tip_pos.pos);
+                        }
+                    },
+                    GestureKind::Grab { tips } =>
+                    {
+                        let pos : Vec<Vec3> = tips.iter()
+                            .flat_map(|tip| hand.get_tip(tip.to_idx()).and_then(|transform| Some(transform.pos)))
+                            .collect();
+
+                        let count = pos.len();
+                        let avg = pos.into_iter().reduce(|acc, pos| acc + pos).unwrap() / (count as f32);
+
+                        world_pos.push(avg);
+                    },
+                    GestureKind::Ray { dist } =>
+                    {
+                        let ray = hand.compute_ray();
+                        let pos = ray.to_points(dist)[1];
+
+                        world_pos.push(pos);
+                    }
                 }
+
+                // Unit vectors
+                // Window space is centered on 0,0
+                // Bottom left is -1, -1 / Top left is 1, 1
+                let half_width  = transform.right() * self.content_size.x * transform.size;
+                let half_height = transform.up()    * self.content_size.y * transform.size;
+
+                let coords : Vec<Vec2> = world_pos.into_iter().map(|pos|
+                {
+                    let v = pos - center;
+                    let normal_projection = (v * normal) / (normal.dot(normal)) * normal;
+                    let plane_pos = v - normal_projection;
+
+                    let u = plane_pos.dot(half_width)  / half_width.dot(half_width);
+                    let v = plane_pos.dot(half_height) / half_height.dot(half_height);
+
+                    Vec2::new(u, v)
+                }).collect();
+
+                return Some(WindowEvent::ContentInteract { pos: coords });
             }
 
             // Move Window
@@ -115,12 +166,8 @@ impl Window
                 {
                     if let Some(diff) = gestures.transform_since_last_frame(&transform.pos)
                     {
-                        transform.pos += diff.pos;
-                        transform.rot  = diff.rot * transform.rot;
-                        // obj.transform.size *= diff.size;
+                        return Some(WindowEvent::Drag { transform: diff });
                     }
-
-                    return Some(WindowEvent::Drag);
                 },
                 GestureKind::Tap { tips: _ } => {},
             }
@@ -136,6 +183,9 @@ impl Window
         let width = Window::WINDOW_HEIGHT * ratio;
         let height = Window::WINDOW_HEIGHT;
 
+        let content_size = Vec2::new(width, Window::CONTENT_HEIGHT);
+
+        self.content_size = content_size;
         self.texture = texture;
         *obb = Some(OBB::new(vec3(width, height, 0.01)));
     }
